@@ -1,0 +1,15 @@
+# Rust build output
+/app/target/
+**/*.rs.bk
+
+# Release artifacts (the executable is attached to GitHub Releases)
+/dist/
+
+# Windows and macOS noise
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Local scratch (screenshots, archives, logs)
+*.log
+*.zip

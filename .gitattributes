@@ -1,0 +1,7 @@
+# Keep the repository LF-only, also when cloned on Windows.
+* text=auto eol=lf
+
+*.png binary
+*.ico binary
+*.exe binary
+*.res binary
