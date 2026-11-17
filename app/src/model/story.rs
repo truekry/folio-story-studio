@@ -4,7 +4,18 @@ use super::*;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Story {
-    pub id: u64,
+    /// Short, story-scoped key, e.g. `A43K`. This is the story's identifier.
+    #[serde(default)]
+    pub key: String,
+    /// UTC milliseconds when the story was first created (0 for old files).
+    #[serde(default)]
+    pub created_at: u64,
+    /// Next chapter number for `key-001`, `key-002`, ...
+    #[serde(default = "one_u32")]
+    pub next_chapter: u32,
+    /// Next lore number for `key-L001`, `key-L002`, ...
+    #[serde(default = "one_u32")]
+    pub next_lore: u32,
     pub title: String,
     #[serde(default)]
     pub premise: String,
@@ -22,7 +33,9 @@ pub struct Story {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Chapter {
-    pub id: u64,
+    /// The chapter's identifier, e.g. `A43K-001`.
+    #[serde(default)]
+    pub key: String,
     pub title: String,
     #[serde(default)]
     pub body: String,
@@ -102,18 +115,21 @@ impl Story {
         self.chapters.iter().map(Chapter::words).sum()
     }
 
-    pub fn chapter(&self, id: u64) -> Option<&Chapter> {
-        self.chapters.iter().find(|c| c.id == id)
+    pub fn chapter(&self, key: &str) -> Option<&Chapter> {
+        self.chapters.iter().find(|chapter| chapter.key == key)
     }
 
-    pub fn chapter_mut(&mut self, id: u64) -> Option<&mut Chapter> {
-        self.chapters.iter_mut().find(|c| c.id == id)
+    pub fn chapter_mut(&mut self, key: &str) -> Option<&mut Chapter> {
+        self.chapters.iter_mut().find(|chapter| chapter.key == key)
     }
 
     /// Remove one chapter, keeping the rest of the story intact and the same
     /// chapter open when a different one was deleted.
-    pub fn delete_chapter(&mut self, chapter_id: u64) -> Option<Chapter> {
-        let index = self.chapters.iter().position(|c| c.id == chapter_id)?;
+    pub fn delete_chapter(&mut self, chapter_key: &str) -> Option<Chapter> {
+        let index = self
+            .chapters
+            .iter()
+            .position(|chapter| chapter.key == chapter_key)?;
         let chapter = self.chapters.remove(index);
         if index < self.open_chapter {
             self.open_chapter -= 1;
@@ -124,29 +140,29 @@ impl Story {
 
     /// Put a deleted chapter back where it was, returning its new index.
     pub fn insert_chapter(&mut self, index: usize, chapter: Chapter) -> usize {
-        let chapter_id = chapter.id;
+        let chapter_key = chapter.key.clone();
         let at = index.min(self.chapters.len());
         self.chapters.insert(at, chapter);
         self.chapters
             .iter()
-            .position(|c| c.id == chapter_id)
+            .position(|candidate| candidate.key == chapter_key)
             .unwrap_or(at)
     }
 
     /// Remove one lorebook entry, keeping the rest of the book intact.
-    pub fn delete_lore(&mut self, entry_id: u64) -> Option<LoreEntry> {
-        let index = self.lore.iter().position(|e| e.id == entry_id)?;
+    pub fn delete_lore(&mut self, entry_key: &str) -> Option<LoreEntry> {
+        let index = self.lore.iter().position(|entry| entry.key == entry_key)?;
         Some(self.lore.remove(index))
     }
 
     /// Put a deleted lorebook entry back where it was, returning its new index.
     pub fn insert_lore(&mut self, index: usize, entry: LoreEntry) -> usize {
-        let entry_id = entry.id;
+        let entry_key = entry.key.clone();
         let at = index.min(self.lore.len());
         self.lore.insert(at, entry);
         self.lore
             .iter()
-            .position(|e| e.id == entry_id)
+            .position(|candidate| candidate.key == entry_key)
             .unwrap_or(at)
     }
 
@@ -326,3 +342,7 @@ impl Chapter {
 /// How much of the condensed conversation stays in the request. At about 300
 /// tokens it is a paragraph of memory, not a second story.
 pub(crate) const CHAT_MEMORY_CHARS: usize = 1200;
+
+pub(crate) fn one_u32() -> u32 {
+    1
+}

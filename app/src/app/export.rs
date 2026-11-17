@@ -15,7 +15,7 @@ impl FolioApp {
             .library
             .stories
             .get(self.active_story)
-            .map(|story| story.id);
+            .map(|story| story.key.clone());
         self.export_name = story_id
             .and_then(|id| self.export_names.get(&id).cloned())
             .unwrap_or_else(|| {
@@ -91,7 +91,7 @@ impl FolioApp {
         match result {
             Ok(files) => {
                 self.export_written = Some(dir.clone());
-                self.export_names.insert(story.id, name.clone());
+                self.export_names.insert(story.key.clone(), name.clone());
                 let message = match kind {
                     ExportKind::Pdf => format!(
                         "Wrote {} to {}",

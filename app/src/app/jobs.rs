@@ -49,33 +49,16 @@ impl FolioApp {
         };
         match result {
             Ok(text) => match job.kind.clone() {
-                JobKind::Summary {
-                    story_id,
-                    chapter_id,
-                    base_len,
-                    base_hash,
-                } => {
-                    // Even a continued reply can end without a full stop; the
-                    // stored summary never does.
-                    let (summary_text, cut) = ai::complete_summary(&text);
-                    if let Some(story) = self.library.story_mut(story_id) {
-                        if let Some(chapter) = story.chapter_mut(chapter_id) {
-                            chapter.summary = summary_text;
-                            chapter.summary_source = "ai".to_string();
-                            chapter.summary_body_len = base_len;
-                            chapter.summary_body_hash = base_hash;
-                        }
-                    }
-                    self.mark_dirty();
-                    if cut {
-                        self.notify(
-                            "The summary came back cut off; it was trimmed to its last finished sentence.",
-                            false,
-                        );
-                    }
-                    // The end of the run reports itself once, in
-                    // finish_summary_batch; the chat stays brainstorm-only.
-                    self.start_next_summary();
+                JobKind::Summary { step } => {
+                    // A block updates the rolling summary; the merge pass
+                    // stores the final text. The run decides which comes next.
+                    self.apply_summary_reply(
+                        step,
+                        job.story_id.clone(),
+                        job.chapter_id.clone(),
+                        text,
+                    );
+                    ctx.request_repaint();
                 }
                 JobKind::Action(action) => {
                     if action.is_prose() {
@@ -89,8 +72,8 @@ impl FolioApp {
                                 live.draft.text = text.trim().to_string();
                                 if let Some(chapter) = self
                                     .library
-                                    .story_mut(job.story_id)
-                                    .and_then(|story| story.chapter_mut(job.chapter_id))
+                                    .story_mut(&job.story_id)
+                                    .and_then(|story| story.chapter_mut(&job.chapter_id))
                                 {
                                     chapter.draft = Some(live.draft);
                                 }
@@ -108,8 +91,8 @@ impl FolioApp {
                         if !answer.is_empty() {
                             if let Some(chapter) = self
                                 .library
-                                .story_mut(job.story_id)
-                                .and_then(|story| story.chapter_mut(job.chapter_id))
+                                .story_mut(&job.story_id)
+                                .and_then(|story| story.chapter_mut(&job.chapter_id))
                             {
                                 chapter.chat.push(ChatMessage {
                                     role: "assistant".to_string(),
@@ -126,10 +109,10 @@ impl FolioApp {
                     }
                 }
                 JobKind::Lore => {
-                    let story_id = job.story_id;
+                    let story_id = job.story_id.clone();
                     let suggestion = self
                         .library
-                        .story(story_id)
+                        .story(&story_id)
                         .map(|story| ai::parse_lore_reply(&text, story));
                     if let Some(suggestion) = suggestion {
                         self.open_lore_proposal(story_id, suggestion);
@@ -137,11 +120,21 @@ impl FolioApp {
                     ctx.request_repaint();
                 }
                 JobKind::Proofread { base_hash } => {
-                    self.apply_proofread(job.story_id, job.chapter_id, base_hash, text);
+                    self.apply_proofread(
+                        job.story_id.clone(),
+                        job.chapter_id.clone(),
+                        base_hash,
+                        text,
+                    );
                     ctx.request_repaint();
                 }
             },
             Err(error) => {
+                if let JobKind::Summary { step } = job.kind {
+                    self.summary_failed(step, error);
+                    ctx.request_repaint();
+                    return;
+                }
                 // A draft that broke off keeps its partial text under the
                 // chapter, with Delete and Retry beside it.
                 let belongs = self.draft_live.as_ref().is_some_and(|live| {

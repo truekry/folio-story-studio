@@ -18,6 +18,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 mod files;
+mod key;
 mod library;
 mod lore;
 mod sample;
@@ -26,12 +27,19 @@ mod store;
 mod story;
 
 pub(crate) use files::*;
+pub(crate) use key::*;
 pub(crate) use library::*;
 pub(crate) use lore::*;
 pub(crate) use sample::*;
 pub(crate) use settings::*;
 pub(crate) use store::*;
 pub(crate) use story::*;
+
+#[cfg(test)]
+mod key_tests;
+
+#[cfg(test)]
+mod store_tests;
 
 #[cfg(test)]
 mod tests;

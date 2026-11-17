@@ -2,9 +2,9 @@
 
 use super::*;
 
-pub(crate) fn chapter(id: u64, title: &str, body: &str, summary: &str, source: &str) -> Chapter {
+pub(crate) fn chapter(_id: u64, title: &str, body: &str, summary: &str, source: &str) -> Chapter {
     Chapter {
-        id,
+        key: String::new(),
         title: title.to_string(),
         body: body.trim().to_string(),
         summary: summary.trim().to_string(),
@@ -19,7 +19,7 @@ pub(crate) fn chapter(id: u64, title: &str, body: &str, summary: &str, source: &
 }
 
 pub(crate) fn lore(
-    id: u64,
+    _id: u64,
     name: &str,
     category: &str,
     aliases: &str,
@@ -28,7 +28,7 @@ pub(crate) fn lore(
     pinned: bool,
 ) -> LoreEntry {
     LoreEntry {
-        id,
+        key: String::new(),
         name: name.to_string(),
         category: category.to_string(),
         aliases: aliases.to_string(),
@@ -40,7 +40,10 @@ pub(crate) fn lore(
 
 pub(crate) fn sample_lantern_coast() -> Story {
     Story {
-        id: 1,
+        key: String::new(),
+        created_at: 0,
+        next_chapter: 1,
+        next_lore: 1,
         title: "The Lantern Coast".to_string(),
         premise: "A cartographer returns to the drowned harbour of her childhood and finds her mother's last map pointing to an island that appears on no tide.".to_string(),
         chapters: vec![
@@ -145,7 +148,10 @@ The island is not lost. It is waiting to be remembered.",
 
 pub(crate) fn sample_orchard() -> Story {
     Story {
-        id: 2,
+        key: String::new(),
+        created_at: 0,
+        next_chapter: 1,
+        next_lore: 1,
         title: "The Orchard at Night".to_string(),
         premise: "A night gardener tends trees that grow memories instead of fruit — until one tree begins to grow her own.".to_string(),
         chapters: vec![chapter(

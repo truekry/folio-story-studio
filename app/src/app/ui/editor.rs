@@ -68,8 +68,8 @@ impl FolioApp {
                     return;
                 };
                 let story_title = story.title.clone();
-                let story_id = story.id;
-                let chapter_id = chapter.id;
+                let story_id = story.key.clone();
+                let chapter_id = chapter.key.clone();
                 let mut title = chapter.title.clone();
                 let mut body = chapter.body.clone();
                 let mut steering = chapter.steering.clone();
@@ -217,7 +217,7 @@ impl FolioApp {
 
                 let title_response = ui.add(
                     TextEdit::singleline(&mut title)
-                        .id(Id::new(("chapter-title", chapter_id)))
+                        .id(Id::new(("chapter-title", chapter_id.clone())))
                         .font(serif_id(31.0))
                         .text_color(C::ink())
                         .frame(false)
@@ -317,7 +317,7 @@ impl FolioApp {
                     });
 
                 let body_height = (ui.available_height() - 12.0).max(180.0);
-                let editor_id = Id::new(("chapter-body", chapter_id));
+                let editor_id = Id::new(("chapter-body", chapter_id.clone()));
                 // While Find is open, matching words in this chapter carry a
                 // background colour; the current one is stronger.
                 let find_query = if self.find_open {
@@ -346,7 +346,7 @@ impl FolioApp {
                     }
                 }
                 let scroll_out = ScrollArea::vertical()
-                    .id_salt(("chapter-scroll", chapter_id))
+                    .id_salt(("chapter-scroll", chapter_id.clone()))
                     .max_height(body_height)
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
@@ -526,17 +526,17 @@ impl FolioApp {
                 }
 
                 match draft_action {
-                    DraftAction::Accept => self.accept_draft(story_id, chapter_id),
-                    DraftAction::Delete => self.discard_draft(story_id, chapter_id),
-                    DraftAction::Retry => self.retry_draft(story_id, chapter_id),
-                    DraftAction::Stop => self.stop_draft(story_id, chapter_id),
+                    DraftAction::Accept => self.accept_draft(story_id.clone(), chapter_id.clone()),
+                    DraftAction::Delete => self.discard_draft(story_id.clone(), chapter_id.clone()),
+                    DraftAction::Retry => self.retry_draft(story_id.clone(), chapter_id.clone()),
+                    DraftAction::Stop => self.stop_draft(story_id.clone(), chapter_id.clone()),
                     DraftAction::None => {}
                 }
                 if stop_steering {
                     if proofread_here {
-                        self.stop_proofread(story_id, chapter_id);
+                        self.stop_proofread(story_id.clone(), chapter_id.clone());
                     } else {
-                        self.stop_draft(story_id, chapter_id);
+                        self.stop_draft(story_id.clone(), chapter_id.clone());
                     }
                 }
                 if let Some(action) = start_action {
@@ -551,7 +551,7 @@ impl FolioApp {
                     }
                     Some(SelectionAction::Lore) => {
                         if let Some(passage) = menu_passage {
-                            self.start_lore_entry(story_id, chapter_id, passage);
+                            self.start_lore_entry(story_id.clone(), chapter_id.clone(), passage);
                         }
                     }
                     None => {}

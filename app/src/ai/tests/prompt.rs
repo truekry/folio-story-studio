@@ -2,6 +2,10 @@
 
 use super::*;
 
+fn single_summary(story: &Story, chapter: &Chapter, settings: &AiSettings) -> String {
+    summary_block_prompt(story, chapter, &chapter.body, 0, 1, settings)
+}
+
 #[test]
 fn local_summary_uses_the_chapter() {
     let library = Library::sample();
@@ -176,11 +180,11 @@ fn summary_prompt_sees_the_same_memory_as_the_writer() {
         summary_window: 0,
         ..Default::default()
     };
-    let condensed = summary_prompt(story, chapter, &settings);
+    let condensed = single_summary(story, chapter, &settings);
     assert!(condensed.contains("STORY SO FAR"));
     assert!(!condensed.contains("RECENT CHAPTER SUMMARIES"));
     settings.summary_window = 2;
-    let windowed = summary_prompt(story, chapter, &settings);
+    let windowed = single_summary(story, chapter, &settings);
     assert!(windowed.contains("RECENT CHAPTER SUMMARIES"));
 }
 
@@ -192,21 +196,21 @@ fn the_summary_asks_for_a_length_and_a_finished_sentence() {
     let story = &library.stories[0];
     let chapter = &story.chapters[2];
     let settings = AiSettings::default();
-    let prompt = summary_prompt(story, chapter, &settings);
+    let prompt = single_summary(story, chapter, &settings);
     assert!(prompt.contains("about 90 words"), "{prompt}");
     assert!(prompt.contains("finish your last sentence"), "{prompt}");
 
     // The author may want a longer summary; the number follows.
     let mut longer = AiSettings::default();
     longer.prompts.summary.words = Some(140);
-    let prompt = summary_prompt(story, chapter, &longer);
+    let prompt = single_summary(story, chapter, &longer);
     assert!(prompt.contains("about 140 words"), "{prompt}");
     assert!(!prompt.contains("about 90 words"));
 
     // Zero takes the length request out entirely.
     let mut no_target = AiSettings::default();
     no_target.prompts.summary.words = Some(0);
-    let prompt = summary_prompt(story, chapter, &no_target);
+    let prompt = single_summary(story, chapter, &no_target);
     assert!(!prompt.contains("Length:"), "{prompt}");
 }
 
@@ -225,20 +229,19 @@ fn the_summary_prompt_is_a_plain_text_memory_keeper() {
     let story = &library.stories[0];
     let chapter = &story.chapters[1];
     let settings = AiSettings::default();
-    let prompt = summary_prompt(story, chapter, &settings);
+    let prompt = single_summary(story, chapter, &settings);
     assert!(prompt.contains("long-term memory"), "{prompt}");
     assert!(prompt.contains("Write plain prose only"), "{prompt}");
     assert!(!prompt.contains("STRICT JSON"), "{prompt}");
     assert!(!prompt.contains("Output shape"), "{prompt}");
     assert!(prompt.contains("past-tense, third-person"), "{prompt}");
-    assert!(prompt.contains("What happened, in order"), "{prompt}");
-    assert!(prompt.contains("Reproduce names, numbers"), "{prompt}");
-    assert!(prompt.contains("no atmosphere"), "{prompt}");
+    assert!(prompt.contains("Summarize the passage below"), "{prompt}");
+    assert!(prompt.contains("Keep every name, number"), "{prompt}");
     assert!(
-        prompt.contains("NEW CHAPTER — A House With No Door"),
+        prompt.contains("do not resolve anything it leaves open"),
         "{prompt}"
     );
-    assert!(prompt.contains("Do not restate the premise"), "{prompt}");
+    assert!(prompt.contains("PASSAGE:\n"), "{prompt}");
 }
 
 #[test]
@@ -316,7 +319,7 @@ fn a_lore_reply_resolves_to_an_entry_or_a_new_one() {
         "TARGET: Brinehouse\nTEXT: The harbour bell rings only when the tide turns.",
         story,
     );
-    assert_eq!(update.target, Some(brinehouse.id));
+    assert_eq!(update.target, Some(brinehouse.key.clone()));
     assert_eq!(update.name, "Brinehouse");
     assert_eq!(update.category, "Place");
     assert!(update.text.contains("harbour bell"), "{update:?}");
@@ -336,7 +339,7 @@ fn a_lore_reply_resolves_to_an_entry_or_a_new_one() {
         "- **TARGET:** Brinehouse\n- **TEXT:** Salt crusts the windows.",
         story,
     );
-    assert_eq!(sloppy.target, Some(brinehouse.id));
+    assert_eq!(sloppy.target, Some(brinehouse.key.clone()));
     assert_eq!(sloppy.text, "Salt crusts the windows.");
 
     // No labels at all: the whole reply becomes the text of a new entry.
@@ -344,4 +347,88 @@ fn a_lore_reply_resolves_to_an_entry_or_a_new_one() {
     assert_eq!(raw.target, None);
     assert!(!raw.well_formed);
     assert_eq!(raw.text, "The bell is older than the town.");
+}
+
+#[test]
+fn a_first_chapter_in_a_new_book_is_named_as_such() {
+    let library = Library::sample();
+    let mut story = library.stories[0].clone();
+    let mut chapter = story.chapters[0].clone();
+    chapter.body.clear();
+    chapter.summary.clear();
+    story.chapters = vec![chapter.clone()];
+    let prompt = chat_prompt(
+        &story,
+        &chapter,
+        Action::Continue,
+        "",
+        "",
+        &AiSettings::default(),
+    );
+    assert!(
+        prompt.contains("CHAPTER POSITION: chapter 1 of 1"),
+        "{prompt}"
+    );
+    assert!(
+        prompt.contains("first chapter of a new book"),
+        "the first chapter must not look like a continuation: {prompt}"
+    );
+    assert!(
+        prompt.contains("No earlier chapter or chapter summary exists"),
+        "{prompt}"
+    );
+    assert!(prompt.contains("The current chapter is empty"), "{prompt}");
+}
+
+#[test]
+fn a_new_empty_chapter_does_not_continue_the_previous_sentence() {
+    let library = Library::sample();
+    let story = library.stories[0].clone();
+    let mut chapter = story.chapters[1].clone();
+    chapter.body.clear();
+    let prompt = chat_prompt(
+        &story,
+        &chapter,
+        Action::Continue,
+        "",
+        "",
+        &AiSettings::default(),
+    );
+    assert!(
+        prompt.contains("CHAPTER POSITION: chapter 2 of 3"),
+        "{prompt}"
+    );
+    assert!(prompt.contains("NEW CHAPTER after chapter 1"), "{prompt}");
+    assert!(
+        prompt.contains("do not continue chapter 1's last sentence"),
+        "{prompt}"
+    );
+    assert!(prompt.contains("The current chapter is empty"), "{prompt}");
+}
+
+#[test]
+fn an_ongoing_chapter_is_not_mistaken_for_a_new_one() {
+    let library = Library::sample();
+    let story = library.stories[0].clone();
+    let chapter = story.chapters[1].clone();
+    let prompt = chat_prompt(
+        &story,
+        &chapter,
+        Action::Continue,
+        "",
+        "",
+        &AiSettings::default(),
+    );
+    assert!(
+        prompt.contains("CHAPTER POSITION: chapter 2 of 3"),
+        "{prompt}"
+    );
+    assert!(
+        prompt.contains("following chapter 1"),
+        "an ongoing chapter still knows where it stands: {prompt}"
+    );
+    assert!(
+        !prompt.contains("NEW CHAPTER"),
+        "a chapter with prose is not a fresh new chapter: {prompt}"
+    );
 }

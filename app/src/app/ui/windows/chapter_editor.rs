@@ -54,7 +54,7 @@ impl FolioApp {
         };
         let story_title = self
             .library
-            .story(draft.story_id)
+            .story(&draft.story_id)
             .map(|story| story.title.clone())
             .unwrap_or_default();
         let mut open = true;
@@ -120,8 +120,8 @@ impl FolioApp {
             }
             if let Some(chapter) = self
                 .library
-                .story_mut(draft.story_id)
-                .and_then(|story| story.chapter_mut(draft.chapter_id))
+                .story_mut(&draft.story_id)
+                .and_then(|story| story.chapter_mut(&draft.chapter_id))
             {
                 chapter.title = title;
                 let summary = draft.summary.trim().to_string();

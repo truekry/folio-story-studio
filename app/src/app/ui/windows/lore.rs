@@ -119,14 +119,19 @@ impl FolioApp {
                 self.lore_editor = Some(draft);
                 return;
             }
-            let new_id = if draft.entry_id.is_none() {
-                Some(self.library.next_id())
+            let new_lore = if draft.entry_id.is_none() {
+                let (story_key, number) = self
+                    .library
+                    .story(&draft.story_id)
+                    .map(|story| (story.key.clone(), story.next_lore.max(1)))
+                    .unwrap_or_default();
+                Some((crate::model::lore_key(&story_key, number), number))
             } else {
                 None
             };
-            if let Some(story) = self.library.story_mut(draft.story_id) {
+            if let Some(story) = self.library.story_mut(&draft.story_id) {
                 if let Some(id) = draft.entry_id {
-                    if let Some(entry) = story.lore.iter_mut().find(|e| e.id == id) {
+                    if let Some(entry) = story.lore.iter_mut().find(|e| e.key.clone() == id) {
                         entry.name = name;
                         entry.category = draft.category;
                         entry.aliases = draft.aliases;
@@ -134,9 +139,9 @@ impl FolioApp {
                         entry.description = draft.description;
                         entry.pinned = draft.pinned;
                     }
-                } else if let Some(id) = new_id {
+                } else if let Some((key, number)) = new_lore {
                     story.lore.push(LoreEntry {
-                        id,
+                        key,
                         name,
                         category: draft.category,
                         aliases: draft.aliases,
@@ -144,6 +149,7 @@ impl FolioApp {
                         description: draft.description,
                         pinned: draft.pinned,
                     });
+                    story.next_lore = number.saturating_add(1);
                 }
             }
             self.mark_dirty();
@@ -160,18 +166,25 @@ impl FolioApp {
         let Some(mut draft) = self.lore_proposal.take() else {
             return;
         };
-        let Some(story) = self.library.story(draft.story_id) else {
+        let Some(story) = self.library.story(&draft.story_id) else {
             self.notify("That story is no longer open.", true);
             return;
         };
-        let entries: Vec<(u64, String, String)> = story
+        let entries: Vec<(String, String, String)> = story
             .lore
             .iter()
-            .map(|entry| (entry.id, entry.name.clone(), entry.category.clone()))
+            .map(|entry| {
+                (
+                    entry.key.clone(),
+                    entry.name.clone(),
+                    entry.category.clone(),
+                )
+            })
             .collect();
         let current = draft
             .target
-            .and_then(|id| story.lore.iter().find(|entry| entry.id == id).cloned());
+            .as_deref()
+            .and_then(|id| story.lore.iter().find(|entry| entry.key == id).cloned());
         let add_to = current.as_ref().map(|entry| entry.name.clone());
 
         let mut open = true;
@@ -216,7 +229,7 @@ impl FolioApp {
                         for (id, name, category) in &entries {
                             ui.selectable_value(
                                 &mut draft.target,
-                                Some(*id),
+                                Some(id.clone()),
                                 format!("{name} [{category}]"),
                             );
                         }
@@ -331,10 +344,10 @@ impl FolioApp {
                 self.lore_proposal = Some(draft);
                 return;
             }
-            if let Some(id) = draft.target {
+            if let Some(id) = draft.target.clone() {
                 let mut saved = None;
-                if let Some(story) = self.library.story_mut(draft.story_id) {
-                    if let Some(entry) = story.lore.iter_mut().find(|entry| entry.id == id) {
+                if let Some(story) = self.library.story_mut(&draft.story_id) {
+                    if let Some(entry) = story.lore.iter_mut().find(|entry| entry.key == id) {
                         entry.description = append_lore(&entry.description, &text);
                         saved = Some(entry.name.clone());
                     }
@@ -353,10 +366,15 @@ impl FolioApp {
                     self.lore_proposal = Some(draft);
                     return;
                 }
-                let id = self.library.next_id();
-                if let Some(story) = self.library.story_mut(draft.story_id) {
+                let (story_key, number) = self
+                    .library
+                    .story(&draft.story_id)
+                    .map(|story| (story.key.clone(), story.next_lore.max(1)))
+                    .unwrap_or_default();
+                let key = crate::model::lore_key(&story_key, number);
+                if let Some(story) = self.library.story_mut(&draft.story_id) {
                     story.lore.push(LoreEntry {
-                        id,
+                        key,
                         name: name.clone(),
                         category: draft.category.clone(),
                         aliases: draft.aliases.trim().to_string(),
@@ -364,6 +382,7 @@ impl FolioApp {
                         description: text,
                         pinned: draft.pinned,
                     });
+                    story.next_lore = number.saturating_add(1);
                 }
                 self.mark_dirty();
                 self.notify(format!("Created the lore entry “{name}”."), false);

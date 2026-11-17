@@ -4,7 +4,9 @@ use super::*;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct LoreEntry {
-    pub id: u64,
+    /// The entry's identifier, e.g. `A43K-L001`.
+    #[serde(default)]
+    pub key: String,
     pub name: String,
     #[serde(default = "default_category")]
     pub category: String,

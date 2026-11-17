@@ -3,8 +3,8 @@
 use super::*;
 
 impl FolioApp {
-    pub(crate) fn open_story_editor_for(&mut self, story_id: u64) {
-        let Some(story) = self.library.story(story_id) else {
+    pub(crate) fn open_story_editor_for(&mut self, story_id: String) {
+        let Some(story) = self.library.story(&story_id) else {
             return;
         };
         self.story_editor_story_id = Some(story_id);
@@ -13,8 +13,8 @@ impl FolioApp {
         self.story_editor_open = true;
     }
 
-    pub(crate) fn ask_delete_story(&mut self, story_id: u64) {
-        let Some(story) = self.library.story(story_id) else {
+    pub(crate) fn ask_delete_story(&mut self, story_id: String) {
+        let Some(story) = self.library.story(&story_id) else {
             return;
         };
         self.confirm = Some(Confirm::Story {
@@ -26,11 +26,11 @@ impl FolioApp {
         self.story_editor_open = false;
     }
 
-    pub(crate) fn edit_chapter(&mut self, story_id: u64, chapter_id: u64) {
+    pub(crate) fn edit_chapter(&mut self, story_id: String, chapter_id: String) {
         let Some(chapter) = self
             .library
-            .story(story_id)
-            .and_then(|story| story.chapter(chapter_id))
+            .story(&story_id)
+            .and_then(|story| story.chapter(&chapter_id))
         else {
             return;
         };
@@ -42,14 +42,18 @@ impl FolioApp {
         });
     }
 
-    pub(crate) fn ask_delete_chapter(&mut self, story_id: u64, chapter_id: u64) {
-        let Some(story) = self.library.story(story_id) else {
+    pub(crate) fn ask_delete_chapter(&mut self, story_id: String, chapter_id: String) {
+        let Some(story) = self.library.story(&story_id) else {
             return;
         };
-        let Some(number) = story.chapters.iter().position(|c| c.id == chapter_id) else {
+        let Some(number) = story
+            .chapters
+            .iter()
+            .position(|c| c.key.clone() == chapter_id)
+        else {
             return;
         };
-        let Some(chapter) = story.chapter(chapter_id) else {
+        let Some(chapter) = story.chapter(&chapter_id) else {
             return;
         };
         self.confirm = Some(Confirm::Chapter {
@@ -63,11 +67,11 @@ impl FolioApp {
         });
     }
 
-    pub(crate) fn ask_delete_lore(&mut self, story_id: u64, entry_id: u64) {
-        let Some(story) = self.library.story(story_id) else {
+    pub(crate) fn ask_delete_lore(&mut self, story_id: String, entry_id: String) {
+        let Some(story) = self.library.story(&story_id) else {
             return;
         };
-        let Some(entry) = story.lore.iter().find(|e| e.id == entry_id) else {
+        let Some(entry) = story.lore.iter().find(|e| e.key.clone() == entry_id) else {
             return;
         };
         self.confirm = Some(Confirm::Lore {
@@ -81,9 +85,22 @@ impl FolioApp {
         });
     }
 
-    pub(crate) fn delete_story_now(&mut self, story_id: u64) {
-        if self.job.as_ref().map(|j| j.story_id) == Some(story_id) {
+    pub(crate) fn delete_story_now(&mut self, story_id: String) {
+        if self
+            .job
+            .as_ref()
+            .is_some_and(|job| job.story_id == story_id)
+        {
             self.job = None;
+        }
+        if self
+            .summary_run
+            .as_ref()
+            .is_some_and(|run| run.story_id == story_id)
+        {
+            self.summary_run = None;
+            self.summary_queue.clear();
+            self.summary_batch = None;
         }
         if self
             .draft_live
@@ -93,19 +110,27 @@ impl FolioApp {
             self.draft_live = None;
             self.draft_error = None;
         }
-        if self.chapter_editor.as_ref().map(|draft| draft.story_id) == Some(story_id) {
+        if self
+            .chapter_editor
+            .as_ref()
+            .is_some_and(|draft| draft.story_id == story_id)
+        {
             self.chapter_editor = None;
         }
-        if self.lore_editor.as_ref().map(|draft| draft.story_id) == Some(story_id) {
+        if self
+            .lore_editor
+            .as_ref()
+            .is_some_and(|draft| draft.story_id == story_id)
+        {
             self.lore_editor = None;
         }
         let index = self
             .library
             .stories
             .iter()
-            .position(|s| s.id == story_id)
+            .position(|story| story.key == story_id)
             .unwrap_or(0);
-        let Some(story) = self.library.delete_story(story_id) else {
+        let Some(story) = self.library.delete_story(&story_id) else {
             self.confirm = None;
             return;
         };
@@ -132,9 +157,22 @@ impl FolioApp {
         self.notify_deleted(format!("Story “{title}” deleted."), trash_id);
     }
 
-    pub(crate) fn delete_chapter_now(&mut self, story_id: u64, chapter_id: u64) {
-        if self.job.as_ref().map(|j| j.chapter_id) == Some(chapter_id) {
+    pub(crate) fn delete_chapter_now(&mut self, story_id: String, chapter_id: String) {
+        if self
+            .job
+            .as_ref()
+            .is_some_and(|job| job.chapter_id == chapter_id)
+        {
             self.job = None;
+        }
+        if self
+            .summary_run
+            .as_ref()
+            .is_some_and(|run| run.chapter_id == chapter_id)
+        {
+            self.summary_run = None;
+            self.summary_queue.clear();
+            self.summary_batch = None;
         }
         if self
             .draft_live
@@ -144,22 +182,31 @@ impl FolioApp {
             self.draft_live = None;
             self.draft_error = None;
         }
-        if self.chapter_editor.as_ref().map(|draft| draft.chapter_id) == Some(chapter_id) {
+        if self
+            .chapter_editor
+            .as_ref()
+            .is_some_and(|draft| draft.chapter_id == chapter_id)
+        {
             self.chapter_editor = None;
         }
         let index = self
             .library
-            .story(story_id)
-            .and_then(|story| story.chapters.iter().position(|c| c.id == chapter_id))
+            .story(&story_id)
+            .and_then(|story| {
+                story
+                    .chapters
+                    .iter()
+                    .position(|chapter| chapter.key == chapter_id)
+            })
             .unwrap_or(0);
         let story_title = self
             .library
-            .story(story_id)
+            .story(&story_id)
             .map(|story| story.title.clone())
             .unwrap_or_default();
-        let open_in_story = self.library.story_mut(story_id).and_then(|story| {
+        let open_in_story = self.library.story_mut(&story_id).and_then(|story| {
             story
-                .delete_chapter(chapter_id)
+                .delete_chapter(&chapter_id)
                 .map(|chapter| (story.open_chapter, chapter))
         });
         let Some((open_chapter, chapter)) = open_in_story else {
@@ -170,7 +217,7 @@ impl FolioApp {
         let trash_id = self.next_trash_id();
         self.trash.push(TrashItem::Chapter {
             id: trash_id,
-            story_id,
+            story_id: story_id.clone(),
             story_title,
             index,
             chapter,
@@ -186,11 +233,16 @@ impl FolioApp {
         self.notify_deleted(format!("Chapter “{title}” deleted."), trash_id);
     }
 
-    pub(crate) fn delete_lore_now(&mut self, story_id: u64, entry_id: u64) {
-        if self.lore_editor.as_ref().and_then(|draft| draft.entry_id) == Some(entry_id) {
+    pub(crate) fn delete_lore_now(&mut self, story_id: String, entry_id: String) {
+        if self
+            .lore_editor
+            .as_ref()
+            .and_then(|draft| draft.entry_id.as_deref())
+            == Some(entry_id.as_str())
+        {
             self.lore_editor = None;
         }
-        let Some(story) = self.library.story(story_id) else {
+        let Some(story) = self.library.story(&story_id) else {
             self.confirm = None;
             return;
         };
@@ -198,12 +250,12 @@ impl FolioApp {
         let index = story
             .lore
             .iter()
-            .position(|entry| entry.id == entry_id)
+            .position(|entry| entry.key == entry_id)
             .unwrap_or(0);
         let Some(entry) = self
             .library
-            .story_mut(story_id)
-            .and_then(|story| story.delete_lore(entry_id))
+            .story_mut(&story_id)
+            .and_then(|story| story.delete_lore(&entry_id))
         else {
             self.confirm = None;
             return;
@@ -225,11 +277,11 @@ impl FolioApp {
 
     /// Empty this chapter's brainstorm. The chapter text, its summary and the
     /// lorebook are untouched; only the conversation and its memory go.
-    pub(crate) fn clear_chat_now(&mut self, story_id: u64, chapter_id: u64) {
+    pub(crate) fn clear_chat_now(&mut self, story_id: String, chapter_id: String) {
         if let Some(chapter) = self
             .library
-            .story_mut(story_id)
-            .and_then(|story| story.chapter_mut(chapter_id))
+            .story_mut(&story_id)
+            .and_then(|story| story.chapter_mut(&chapter_id))
         {
             clear_chapter_chat(chapter);
         }
@@ -276,7 +328,7 @@ impl FolioApp {
                 ..
             } => {
                 let title = chapter.title.clone();
-                if let Some(story) = self.library.story_mut(story_id) {
+                if let Some(story) = self.library.story_mut(&story_id) {
                     let at = story.insert_chapter(index, chapter);
                     story.open_chapter = at;
                     if self.story_id() == story_id {
@@ -295,7 +347,7 @@ impl FolioApp {
                 ..
             } => {
                 let name = entry.name.clone();
-                if let Some(story) = self.library.story_mut(story_id) {
+                if let Some(story) = self.library.story_mut(&story_id) {
                     story.insert_lore(index, entry);
                     self.mark_dirty();
                     self.notify(format!("Lore entry “{name}” put back."), false);
@@ -304,12 +356,14 @@ impl FolioApp {
         }
     }
 
-    pub(crate) fn edit_lore(&mut self, entry_id: Option<u64>) {
+    pub(crate) fn edit_lore(&mut self, entry_id: Option<String>) {
         let Some(story) = self.library.stories.get(self.active_story) else {
             return;
         };
-        let story_id = story.id;
-        let entry = entry_id.and_then(|id| story.lore.iter().find(|e| e.id == id));
+        let story_id = story.key.clone();
+        let entry = entry_id
+            .as_deref()
+            .and_then(|id| story.lore.iter().find(|entry| entry.key == id));
         self.lore_editor = Some(LoreDraft {
             story_id,
             entry_id,
@@ -330,14 +384,25 @@ impl FolioApp {
         } else {
             self.new_story_title.trim().to_string()
         };
-        let story_id = self.library.next_id();
-        let chapter_id = self.library.next_id();
+        let created_at = crate::model::now_millis();
+        let used: HashSet<String> = self
+            .library
+            .stories
+            .iter()
+            .map(|story| story.key.clone())
+            .filter(|key| !key.is_empty())
+            .collect();
+        let story_key = crate::model::unique_story_key(&title, created_at, &used);
+        let first_chapter_key = crate::model::chapter_key(&story_key, 1);
         let story = Story {
-            id: story_id,
+            key: story_key,
+            created_at,
+            next_chapter: 2,
+            next_lore: 1,
             title,
             premise: self.new_story_premise.trim().to_string(),
             chapters: vec![Chapter {
-                id: chapter_id,
+                key: first_chapter_key,
                 title: "Chapter One".to_string(),
                 body: String::new(),
                 summary: String::new(),
@@ -376,10 +441,12 @@ impl FolioApp {
         } else {
             self.new_chapter_title.trim().to_string()
         };
-        let id = self.library.next_id();
+        let story_key = story.key.clone();
+        let number = story.next_chapter.max(1);
+        let key = crate::model::chapter_key(&story_key, number);
         if let Some(story) = self.library.stories.get_mut(self.active_story) {
             story.chapters.push(Chapter {
-                id,
+                key,
                 title,
                 body: String::new(),
                 summary: String::new(),
@@ -391,6 +458,7 @@ impl FolioApp {
                 steering: String::new(),
                 draft: None,
             });
+            story.next_chapter = number.saturating_add(1);
             let index = story.chapters.len() - 1;
             story.open_chapter = index;
             self.active_chapter = index;

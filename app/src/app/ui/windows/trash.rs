@@ -54,7 +54,7 @@ impl FolioApp {
                                 let context = item.context();
                                 let story_gone = item
                                     .story_id()
-                                    .map(|story_id| self.library.story(story_id).is_none())
+                                    .map(|story_id| self.library.story(&story_id).is_none())
                                     .unwrap_or(false);
                                 let seconds = item.deleted_at().elapsed().as_secs();
                                 let age = if seconds < 5 {

@@ -7,8 +7,6 @@ pub struct Library {
     pub stories: Vec<Story>,
     #[serde(default)]
     pub settings: AiSettings,
-    #[serde(default = "one")]
-    pub next_id: u64,
     #[serde(default)]
     pub active_story: usize,
     /// Whether the chapter header carries the Summary… button. Off, the page
@@ -31,11 +29,11 @@ pub struct Library {
 }
 
 impl Library {
-    pub fn sample() -> Self {
+    /// A real first start: no books, no sample stories.
+    pub fn empty() -> Self {
         Self {
-            stories: vec![sample_lantern_coast(), sample_orchard()],
+            stories: Vec::new(),
             settings: AiSettings::default(),
-            next_id: 100,
             active_story: 0,
             show_summary: true,
             writing_font: String::new(),
@@ -45,13 +43,23 @@ impl Library {
         }
     }
 
-    pub fn next_id(&mut self) -> u64 {
-        self.next_id = self.next_id.saturating_add(1);
-        self.next_id
+    pub fn sample() -> Self {
+        let mut library = Self {
+            stories: vec![sample_lantern_coast(), sample_orchard()],
+            settings: AiSettings::default(),
+            active_story: 0,
+            show_summary: true,
+            writing_font: String::new(),
+            writing_size: DEFAULT_WRITING_SIZE,
+            export_dir: String::new(),
+            export_pdf: true,
+        };
+        ensure_library_keys(&mut library);
+        library
     }
 
-    pub fn story(&self, id: u64) -> Option<&Story> {
-        self.stories.iter().find(|s| s.id == id)
+    pub fn story(&self, key: &str) -> Option<&Story> {
+        self.stories.iter().find(|story| story.key == key)
     }
 
     /// Move a story-wide conversation from an older library into the chapter
@@ -73,8 +81,8 @@ impl Library {
         }
     }
 
-    pub fn story_mut(&mut self, id: u64) -> Option<&mut Story> {
-        self.stories.iter_mut().find(|s| s.id == id)
+    pub fn story_mut(&mut self, key: &str) -> Option<&mut Story> {
+        self.stories.iter_mut().find(|story| story.key == key)
     }
 
     pub fn total_words(&self) -> u64 {
@@ -86,8 +94,11 @@ impl Library {
 
     /// Remove a whole story (chapters, lorebook and notes) by id. The same
     /// story stays open when another one was deleted.
-    pub fn delete_story(&mut self, story_id: u64) -> Option<Story> {
-        let index = self.stories.iter().position(|s| s.id == story_id)?;
+    pub fn delete_story(&mut self, story_key: &str) -> Option<Story> {
+        let index = self
+            .stories
+            .iter()
+            .position(|story| story.key == story_key)?;
         let story = self.stories.remove(index);
         if index < self.active_story {
             self.active_story -= 1;
@@ -100,12 +111,12 @@ impl Library {
 
     /// Put a deleted story back where it was, returning its new index.
     pub fn insert_story(&mut self, index: usize, story: Story) -> usize {
-        let story_id = story.id;
+        let story_key = story.key.clone();
         let at = index.min(self.stories.len());
         self.stories.insert(at, story);
         self.stories
             .iter()
-            .position(|s| s.id == story_id)
+            .position(|candidate| candidate.key == story_key)
             .unwrap_or(at)
     }
 }

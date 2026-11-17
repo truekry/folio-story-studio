@@ -6,7 +6,7 @@ use super::*;
 /// exist right now. `target` is Some when the facts belong to an entry.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LoreSuggestion {
-    pub target: Option<u64>,
+    pub target: Option<String>,
     pub target_name: String,
     pub name: String,
     pub category: String,
@@ -96,7 +96,11 @@ pub fn parse_lore_reply(reply: &str, story: &Story) -> LoreSuggestion {
         target_id = find_lore(story, &target_name, &name);
     }
     if target_id.is_some() {
-        if let Some(entry) = story.lore.iter().find(|entry| Some(entry.id) == target_id) {
+        if let Some(entry) = story
+            .lore
+            .iter()
+            .find(|entry| Some(&entry.key) == target_id.as_ref())
+        {
             // An update only adds the new facts; the entry's own name and
             // category stay the truth.
             target_name = entry.name.clone();
@@ -160,7 +164,7 @@ pub fn demo_lore_reply(story: &Story, passage: &str) -> String {
     }
 }
 
-pub(crate) fn find_lore(story: &Story, target: &str, name: &str) -> Option<u64> {
+pub(crate) fn find_lore(story: &Story, target: &str, name: &str) -> Option<String> {
     for candidate in [target, name] {
         let candidate = candidate.trim().trim_end_matches('.');
         if candidate.is_empty()
@@ -176,7 +180,7 @@ pub(crate) fn find_lore(story: &Story, target: &str, name: &str) -> Option<u64> 
                     .split(',')
                     .any(|alias| alias.trim().eq_ignore_ascii_case(candidate))
         }) {
-            return Some(entry.id);
+            return Some(entry.key.clone());
         }
     }
     None

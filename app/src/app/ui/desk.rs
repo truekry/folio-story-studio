@@ -107,8 +107,8 @@ impl FolioApp {
         };
         let messages = chapter.chat.clone();
         let memory = chapter.chat_summary.clone();
-        let story_id = story.id;
-        let chapter_id = chapter.id;
+        let story_id = story.key.clone();
+        let chapter_id = chapter.key.clone();
         let has_chat = !messages.is_empty() || !memory.trim().is_empty();
         let window = self.library.settings.recent_window();
         let position = self.active_chapter;
@@ -140,10 +140,20 @@ impl FolioApp {
         });
         let chat_stop = streaming_chat || proofread_here;
         let job_label = match self.job.as_ref().map(|j| &j.kind) {
-            Some(JobKind::Summary { .. }) => match self.summary_progress() {
-                Some((done, total)) if done < total => format!("Summarizing {}/{total}…", done + 1),
-                _ => "Summarizing…".to_string(),
-            },
+            Some(JobKind::Summary { .. }) => {
+                if self.summary_merging() {
+                    "Merging summary…".to_string()
+                } else if let Some((part, total)) = self.summary_block_progress() {
+                    format!("Summarizing {part}/{total}…")
+                } else {
+                    match self.summary_progress() {
+                        Some((done, total)) if done < total => {
+                            format!("Summarizing {}/{total}…", done + 1)
+                        }
+                        _ => "Summarizing…".to_string(),
+                    }
+                }
+            }
             Some(JobKind::Action(_)) => "Writing…".to_string(),
             Some(JobKind::Lore) => "Reading the selection…".to_string(),
             Some(JobKind::Proofread { .. }) => {
@@ -319,7 +329,7 @@ impl FolioApp {
             });
 
         if stop_chat {
-            self.stop_chat(story_id, chapter_id);
+            self.stop_chat(story_id.clone(), chapter_id.clone());
         }
         let user_scrolled =
             ui.input(|i| i.raw_scroll_delta.y.abs() > 0.5 || i.smooth_scroll_delta.y.abs() > 0.5);
@@ -489,7 +499,7 @@ impl FolioApp {
         let Some(story) = self.library.stories.get(self.active_story) else {
             return;
         };
-        let story_id = story.id;
+        let story_id = story.key.clone();
         let entries = story.lore.clone();
         let body = story
             .chapters
@@ -497,8 +507,8 @@ impl FolioApp {
             .map(|c| c.body.clone())
             .unwrap_or_default();
         let mentioned = story.mentioned_lore(&body).len();
-        let mut lore_menu: Option<(u64, LoreMenu)> = None;
-        let mut edit_entry: Option<Option<u64>> = None;
+        let mut lore_menu: Option<(String, LoreMenu)> = None;
+        let mut edit_entry: Option<Option<String>> = None;
         let filter = self.lore_filter.clone();
 
         ui.horizontal(|ui| {
@@ -611,7 +621,7 @@ impl FolioApp {
                         }
                     });
                     if picked.is_some() {
-                        lore_menu = picked.map(|action| (entry.id, action));
+                        lore_menu = picked.map(|action| (entry.key.clone(), action));
                     }
                     ui.add_space(4.0);
                 }
@@ -623,8 +633,8 @@ impl FolioApp {
                 LoreMenu::TogglePin => {
                     if let Some(entry) = self
                         .library
-                        .story_mut(story_id)
-                        .and_then(|story| story.lore.iter_mut().find(|e| e.id == entry_id))
+                        .story_mut(&story_id)
+                        .and_then(|story| story.lore.iter_mut().find(|e| e.key == entry_id))
                     {
                         entry.pinned = !entry.pinned;
                     }

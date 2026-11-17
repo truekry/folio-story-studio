@@ -20,7 +20,7 @@
 
 use crate::ai::{self, Action, StreamEvent};
 use crate::model::{
-    AiSettings, Chapter, ChatMessage, Draft, Library, LoreEntry, PromptSettings, Story,
+    AiSettings, Chapter, ChatMessage, Draft, Library, LoreEntry, PromptSettings, Store, Story,
 };
 use crate::theme::{self, serif_id, C};
 use eframe::egui::{
@@ -28,7 +28,7 @@ use eframe::egui::{
     Id, Key, Label, Layout, Margin, Modal, PointerButton, Pos2, Response, RichText, ScrollArea,
     Sense, Stroke, TextEdit, TextFormat, TopBottomPanel, Ui, Vec2, ViewportCommand, Window,
 };
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -88,19 +88,41 @@ pub(crate) enum DraftAction {
 enum JobKind {
     Action(Action),
     Summary {
-        story_id: u64,
-        chapter_id: u64,
-        /// The chapter text the summary was written from. It is recorded with
-        /// the answer even when the author edits the chapter while it runs, so
-        /// a changed body leaves the summary marked as needing a refresh.
-        base_len: usize,
-        base_hash: u64,
+        step: SummaryStep,
     },
     Lore,
     /// A paragraph-by-paragraph spelling and grammar pass.
     Proofread {
         base_hash: u64,
     },
+}
+
+/// One request in a block-wise summary: a block of the chapter, or the final
+/// pass that turns the block summaries into one text.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SummaryStep {
+    Block(usize),
+    Merge,
+}
+
+/// The state of the chapter that is being summarized right now. The chapter
+/// queue in `summary_queue` handles whole chapters; this handles the blocks
+/// inside one chapter.
+struct SummaryRun {
+    story_id: String,
+    chapter_id: String,
+    /// The chapter as it stood when the run started. Blocks address this text,
+    /// so an edit during the run cannot move them underneath the model.
+    source: String,
+    blocks: Vec<Range<usize>>,
+    next: usize,
+    /// The summaries of the blocks that are done. Blocks are independent; the
+    /// merge pass joins these parts only after every block has been read.
+    parts: Vec<String>,
+    base_len: usize,
+    base_hash: u64,
+    /// How many times the current step has been tried.
+    attempts: u8,
 }
 
 /// What the author picked from the right-click menu on a selection.
@@ -114,8 +136,8 @@ enum SelectionAction {
 /// One AI suggestion for the lorebook, waiting for the author's yes. For an
 /// update, `text` holds only the new facts; `target` names the entry.
 struct LoreProposal {
-    story_id: u64,
-    target: Option<u64>,
+    story_id: String,
+    target: Option<String>,
     name: String,
     category: String,
     aliases: String,
@@ -155,8 +177,8 @@ impl StreamFold {
 
 struct Job {
     kind: JobKind,
-    story_id: u64,
-    chapter_id: u64,
+    story_id: String,
+    chapter_id: String,
     stream: StreamFold,
     rx: Receiver<StreamEvent>,
     cancel: Arc<AtomicBool>,
@@ -176,8 +198,8 @@ impl Drop for Job {
 /// it moves into `chapter.draft`; until then it is kept here so the chapter
 /// text never changes while the model writes.
 struct LiveDraft {
-    story_id: u64,
-    chapter_id: u64,
+    story_id: String,
+    chapter_id: String,
     draft: Draft,
 }
 
@@ -282,8 +304,8 @@ impl Probe {
 /// Chapter bodies from before a book-wide replacement, so it can be undone.
 #[derive(Clone)]
 pub(crate) struct ReplaceUndo {
-    story_id: u64,
-    chapters: Vec<(u64, String)>,
+    story_id: String,
+    chapters: Vec<(String, String)>,
 }
 
 #[derive(Clone)]
@@ -293,8 +315,8 @@ enum UndoAction {
 }
 
 struct LoreDraft {
-    story_id: u64,
-    entry_id: Option<u64>,
+    story_id: String,
+    entry_id: Option<String>,
     name: String,
     category: String,
     aliases: String,
@@ -304,8 +326,8 @@ struct LoreDraft {
 }
 
 struct ChapterDraft {
-    story_id: u64,
-    chapter_id: u64,
+    story_id: String,
+    chapter_id: String,
     title: String,
     summary: String,
 }
@@ -314,14 +336,14 @@ struct ChapterDraft {
 #[derive(Clone)]
 enum Confirm {
     Story {
-        story_id: u64,
+        story_id: String,
         title: String,
         chapters: usize,
         lore: usize,
     },
     Chapter {
-        story_id: u64,
-        chapter_id: u64,
+        story_id: String,
+        chapter_id: String,
         story_title: String,
         title: String,
         number: usize,
@@ -329,8 +351,8 @@ enum Confirm {
         summarized: bool,
     },
     Lore {
-        story_id: u64,
-        entry_id: u64,
+        story_id: String,
+        entry_id: String,
         story_title: String,
         name: String,
         category: String,
@@ -338,8 +360,8 @@ enum Confirm {
         pinned: bool,
     },
     Chat {
-        story_id: u64,
-        chapter_id: u64,
+        story_id: String,
+        chapter_id: String,
     },
     Replace {
         query: String,
@@ -349,7 +371,7 @@ enum Confirm {
         chapters: usize,
         story_title: String,
         /// Some when only the open chapter is replaced; empty for the whole book.
-        chapter_id: Option<u64>,
+        chapter_id: Option<String>,
         chapter_title: String,
     },
 }
@@ -365,7 +387,7 @@ enum TrashItem {
     },
     Chapter {
         id: u64,
-        story_id: u64,
+        story_id: String,
         story_title: String,
         index: usize,
         chapter: Chapter,
@@ -373,7 +395,7 @@ enum TrashItem {
     },
     Lore {
         id: u64,
-        story_id: u64,
+        story_id: String,
         story_title: String,
         index: usize,
         entry: LoreEntry,
@@ -420,11 +442,11 @@ impl TrashItem {
         }
     }
 
-    fn story_id(&self) -> Option<u64> {
+    fn story_id(&self) -> Option<&str> {
         match self {
             TrashItem::Story { .. } => None,
             TrashItem::Chapter { story_id, .. } | TrashItem::Lore { story_id, .. } => {
-                Some(*story_id)
+                Some(story_id)
             }
         }
     }
@@ -467,7 +489,7 @@ pub(crate) enum ExportKind {
 
 pub struct FolioApp {
     library: Library,
-    store_path: Option<PathBuf>,
+    store: Option<Store>,
     shot: Option<Shot>,
     active_story: usize,
     active_chapter: usize,
@@ -481,7 +503,7 @@ pub struct FolioApp {
     new_chapter_open: bool,
     new_chapter_title: String,
     story_editor_open: bool,
-    story_editor_story_id: Option<u64>,
+    story_editor_story_id: Option<String>,
     story_title_draft: String,
     story_premise_draft: String,
     chapter_editor: Option<ChapterDraft>,
@@ -499,7 +521,9 @@ pub struct FolioApp {
     ai_input: String,
     job: Option<Job>,
     /// Chapters still waiting for a summary inside the current run, oldest first.
-    summary_queue: VecDeque<(u64, u64)>,
+    summary_queue: VecDeque<(String, String)>,
+    /// The blocks and running summary of the chapter being summarized now.
+    summary_run: Option<SummaryRun>,
     summary_batch: Option<SummaryBatch>,
     /// Model names the endpoint listed the last time it was asked, and the
     /// address they were listed for.
@@ -519,6 +543,9 @@ pub struct FolioApp {
     toast: Option<Toast>,
     dirty: bool,
     last_edit: Instant,
+    /// After a failed save, wait before trying again so a locked file does not
+    /// produce a new error every few hundred milliseconds.
+    save_retry_at: Option<Instant>,
     summary_open: bool,
     find_open: bool,
     find_query: String,
@@ -529,7 +556,7 @@ pub struct FolioApp {
     /// Which match "Find next" last jumped to, if any.
     find_index: Option<usize>,
     find_focus: bool,
-    pending_selection: Option<(u64, Range<usize>)>,
+    pending_selection: Option<(String, Range<usize>)>,
     editor_selection: Option<Range<usize>>,
     /// The prose draft currently being written, if any.
     draft_live: Option<LiveDraft>,
@@ -548,7 +575,7 @@ pub struct FolioApp {
     /// The file name as typed in the dialog.
     export_name: String,
     /// Names already used per story, so reopening the dialog keeps them.
-    export_names: HashMap<u64, String>,
+    export_names: HashMap<String, String>,
     /// Files that would be replaced if the export ran now. While this is set,
     /// the dialog asks before writing anything.
     export_existing: Option<Vec<String>>,

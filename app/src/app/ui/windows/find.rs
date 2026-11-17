@@ -223,7 +223,7 @@ impl FolioApp {
         }
         if let Some(range) = jump {
             self.editor_selection = None;
-            self.pending_selection = Some((chapter.id, range));
+            self.pending_selection = Some((chapter.key.clone(), range));
         } else if do_replace {
             let query = self.find_query.trim().to_string();
             let matches = find_char_ranges(&chapter.body, &query, self.find_match_case).len();
@@ -234,7 +234,7 @@ impl FolioApp {
                 matches,
                 chapters: 1,
                 story_title: story.title.clone(),
-                chapter_id: Some(chapter.id),
+                chapter_id: Some(chapter.key.clone()),
                 chapter_title: chapter.title.clone(),
             });
         }

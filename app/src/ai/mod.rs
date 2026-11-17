@@ -32,6 +32,7 @@ mod prompt;
 mod proofread;
 mod reply;
 mod stream;
+mod summarize;
 
 pub use budget::*;
 pub use demo::*;
@@ -42,6 +43,7 @@ pub use prompt::*;
 pub use proofread::*;
 pub use reply::*;
 pub use stream::*;
+pub use summarize::*;
 
 #[cfg(test)]
 mod tests;

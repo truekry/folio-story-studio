@@ -25,11 +25,11 @@ impl FolioApp {
             );
             return;
         }
-        let story_id = story.id;
+        let story_id = story.key.clone();
         let asked_title = chapter.title.clone();
         let ids = summary_queue(story, chapter_index, window);
         let total = ids.len();
-        self.summary_queue = ids.into_iter().map(|id| (story_id, id)).collect();
+        self.summary_queue = ids.into_iter().map(|id| (story_id.clone(), id)).collect();
         self.summary_batch = Some(SummaryBatch { total, asked_title });
         if total > 1 {
             self.notify(
@@ -55,31 +55,31 @@ impl FolioApp {
         let Some(story) = self.library.stories.get(story_index) else {
             return;
         };
-        let ids: Vec<u64> = story
+        let ids: Vec<String> = story
             .chapters_needing_summary(chapter_index, window)
             .into_iter()
-            .map(|chapter| chapter.id)
+            .map(|chapter| chapter.key.clone())
             .collect();
-        let Some(last) = ids.last().copied() else {
+        let Some(last) = ids.last().cloned() else {
             self.notify("Every older chapter already has a summary.", false);
             return;
         };
-        let story_id = story.id;
+        let story_id = story.key.clone();
         // For a run of one, this name is what the toast reports.
         let asked_title = story
             .chapters
             .iter()
-            .find(|chapter| chapter.id == last)
+            .find(|chapter| chapter.key == last)
             .map(|chapter| chapter.title.clone())
             .unwrap_or_default();
         let total = ids.len();
-        self.summary_queue = ids.into_iter().map(|id| (story_id, id)).collect();
+        self.summary_queue = ids.into_iter().map(|id| (story_id.clone(), id)).collect();
         self.summary_batch = Some(SummaryBatch { total, asked_title });
         self.start_next_summary();
     }
 
     /// Pull the next chapter off the queue and either summarize it locally or
-    /// hand it to the endpoint. Ends the batch when the queue runs dry.
+    /// start a block-wise run. Ends the batch when the queue runs dry.
     pub(crate) fn start_next_summary(&mut self) {
         if self.job.is_some() {
             return;
@@ -88,42 +88,107 @@ impl FolioApp {
             self.finish_summary_batch();
             return;
         };
+        self.summary_run = None;
         if self.library.settings.is_demo() {
             self.write_local_summary(story_id, chapter_id);
             // Local summaries are instant, so the whole batch runs in one frame.
             self.start_next_summary();
             return;
         }
-        let Some(story) = self.library.story(story_id) else {
-            self.finish_summary_batch();
-            return;
-        };
-        let Some(chapter) = story.chapter(chapter_id) else {
+        let Some((source, base_len, base_hash, blocks)) = self
+            .library
+            .story(&story_id)
+            .and_then(|story| story.chapter(&chapter_id))
+            .map(|chapter| {
+                let source = chapter.body.clone();
+                let blocks = ai::summary_blocks(&source, ai::SUMMARY_BLOCK_WORDS);
+                let base_len = source.chars().count();
+                let base_hash = crate::model::content_hash(&source);
+                (source, base_len, base_hash, blocks)
+            })
+        else {
             self.start_next_summary();
             return;
         };
-        let prompt = ai::summary_prompt(story, chapter, &self.library.settings);
-        // What the summary describes, not what the chapter happens to hold when
-        // the answer arrives. An edit during the run must mark it stale.
-        let base_len = chapter.body.chars().count();
-        let base_hash = crate::model::content_hash(&chapter.body);
+        if blocks.is_empty() {
+            self.start_next_summary();
+            return;
+        }
+        self.summary_run = Some(SummaryRun {
+            story_id,
+            chapter_id,
+            source,
+            blocks,
+            next: 0,
+            parts: Vec::new(),
+            base_len,
+            base_hash,
+            attempts: 0,
+        });
+        self.start_next_summary_step();
+    }
+
+    /// Start the next request of the current chapter: the next block, or the
+    /// final pass that rewrites the block summaries as one text.
+    pub(crate) fn start_next_summary_step(&mut self) {
+        if self.job.is_some() {
+            return;
+        }
+        let Some(run) = self.summary_run.as_ref() else {
+            return;
+        };
+        let story_id = run.story_id.clone();
+        let chapter_id = run.chapter_id.clone();
+        let Some(story) = self.library.story(&story_id) else {
+            self.abort_summary_run("The story is no longer here.");
+            return;
+        };
+        let Some(chapter) = story.chapter(&chapter_id) else {
+            self.abort_summary_run("The chapter is no longer here.");
+            return;
+        };
+        let (step, prompt, words, temperature) = if run.next < run.blocks.len() {
+            let range = run.blocks[run.next].clone();
+            let passage = run.source.get(range).unwrap_or_default();
+            let prompt = ai::summary_block_prompt(
+                story,
+                chapter,
+                passage,
+                run.next,
+                run.blocks.len(),
+                &self.library.settings,
+            );
+            // The author's word target is the target for one block.
+            let words = ai::summary_block_words(&self.library.settings);
+            (SummaryStep::Block(run.next), prompt, words, 0.3_f32)
+        } else if run.blocks.len() > 1 {
+            // Every block is done. Only now are the independent parts joined:
+            // the merge prompt reads the whole combined text and rewrites it.
+            let combined = run.parts.join("\n\n");
+            let prompt = ai::summary_merge_prompt(&combined);
+            let words = run
+                .parts
+                .iter()
+                .map(|part| part.split_whitespace().count())
+                .sum::<usize>() as u32;
+            (SummaryStep::Merge, prompt, words, 0.2_f32)
+        } else {
+            // A one-block chapter is already one text; there is nothing to
+            // merge. This is reached only by a retry after the block succeeded.
+            let summary = run.parts.first().cloned().unwrap_or_default();
+            let (base_len, base_hash) = (run.base_len, run.base_hash);
+            self.summary_run = None;
+            self.store_chapter_summary(story_id, chapter_id, summary, base_len, base_hash);
+            self.start_next_summary();
+            return;
+        };
         let mut settings = self.library.settings.clone();
         // A summary is a record, not a scene: keep the model close to the facts
         // even when the author likes a lively prose temperature.
-        settings.temperature = settings.temperature.min(0.3);
-        let words = ai::PromptKind::Summary.words(&settings.prompts);
-        // A summary is a fresh, self-contained request; the chapter's
-        // conversation is not part of it. The word target keeps a talkative
-        // model from wandering, and a reply that still runs into the limit is
-        // continued instead of being stored half-finished.
-        let (rx, cancel) = start_stream(settings, prompt, Vec::new(), String::new(), words, false);
+        settings.temperature = settings.temperature.min(temperature);
+        let (rx, cancel) = start_stream(settings, prompt, Vec::new(), String::new(), words, true);
         self.job = Some(Job {
-            kind: JobKind::Summary {
-                story_id,
-                chapter_id,
-                base_len,
-                base_hash,
-            },
+            kind: JobKind::Summary { step },
             story_id,
             chapter_id,
             stream: StreamFold::default(),
@@ -133,21 +198,164 @@ impl FolioApp {
         });
     }
 
+    /// Fold one finished summary reply into the run. A block updates the
+    /// running summary and starts the next step; the merge step stores the
+    /// final text.
+    pub(crate) fn apply_summary_reply(
+        &mut self,
+        step: SummaryStep,
+        story_id: String,
+        chapter_id: String,
+        text: String,
+    ) {
+        let Some(run) = self.summary_run.as_ref() else {
+            return;
+        };
+        if run.story_id != story_id || run.chapter_id != chapter_id {
+            return;
+        }
+        if expected_summary_step(run) != step {
+            return;
+        }
+        let (summary, _cut) = ai::complete_summary(&text);
+        if summary.trim().is_empty() {
+            self.summary_failed(step, "The summary reply had no text.".to_string());
+            return;
+        }
+        let (next, total, base_len, base_hash) = {
+            let run = self.summary_run.as_ref().expect("checked above");
+            (run.next, run.blocks.len(), run.base_len, run.base_hash)
+        };
+        match step {
+            SummaryStep::Block(index) if index == next => {
+                let done = {
+                    let run = self.summary_run.as_mut().expect("checked above");
+                    // Blocks stay independent; the merge pass joins them later.
+                    run.parts.push(summary);
+                    run.next += 1;
+                    run.attempts = 0;
+                    run.next >= total
+                };
+                if done && total <= 1 {
+                    let (summary, base_len, base_hash) = {
+                        let run = self.summary_run.as_ref().expect("checked above");
+                        (
+                            run.parts.first().cloned().unwrap_or_default(),
+                            run.base_len,
+                            run.base_hash,
+                        )
+                    };
+                    self.summary_run = None;
+                    self.store_chapter_summary(story_id, chapter_id, summary, base_len, base_hash);
+                    self.start_next_summary();
+                } else {
+                    // The next step is the following block or, after the last
+                    // block, the merge pass.
+                    self.start_next_summary_step();
+                }
+            }
+            SummaryStep::Merge => {
+                self.summary_run = None;
+                self.store_chapter_summary(story_id, chapter_id, summary, base_len, base_hash);
+                self.start_next_summary();
+            }
+            _ => {}
+        }
+    }
+
+    /// A block or merge request failed. Retry the same step once; if it fails
+    /// again, keep the old summary. A failed merge after a successful block run
+    /// saves the combined block summary rather than throwing the work away.
+    pub(crate) fn summary_failed(&mut self, step: SummaryStep, error: String) {
+        let Some(run) = self.summary_run.as_mut() else {
+            return;
+        };
+        if expected_summary_step(run) != step {
+            return;
+        }
+        if run.attempts == 0 {
+            run.attempts = 1;
+            self.start_next_summary_step();
+            return;
+        }
+        let (story_id, chapter_id, combined, base_len, base_hash) = (
+            run.story_id.clone(),
+            run.chapter_id.clone(),
+            run.parts.join("\n\n"),
+            run.base_len,
+            run.base_hash,
+        );
+        self.summary_run = None;
+        if step == SummaryStep::Merge && !combined.trim().is_empty() {
+            self.store_chapter_summary(story_id, chapter_id, combined, base_len, base_hash);
+            self.notify(
+                format!(
+                    "The final merge failed, so the combined block summary was saved. ({error})"
+                ),
+                true,
+            );
+            self.start_next_summary();
+            return;
+        }
+        self.summary_queue.clear();
+        self.summary_batch = None;
+        self.notify(format!("AI request failed: {error}"), true);
+    }
+
+    fn abort_summary_run(&mut self, reason: &str) {
+        self.summary_run = None;
+        self.summary_queue.clear();
+        self.summary_batch = None;
+        self.notify(reason, true);
+    }
+
+    fn store_chapter_summary(
+        &mut self,
+        story_id: String,
+        chapter_id: String,
+        text: String,
+        base_len: usize,
+        base_hash: u64,
+    ) {
+        let (summary, cut) = ai::complete_summary(&text);
+        if summary.trim().is_empty() {
+            self.notify("The summary reply had no text.", true);
+            return;
+        }
+        if let Some(chapter) = self
+            .library
+            .story_mut(&story_id)
+            .and_then(|story| story.chapter_mut(&chapter_id))
+        {
+            chapter.summary = summary;
+            chapter.summary_source = "ai".to_string();
+            chapter.summary_body_len = base_len;
+            chapter.summary_body_hash = base_hash;
+            self.mark_dirty();
+        }
+        if cut {
+            self.notify(
+                "The summary came back cut off; it was trimmed to its last finished sentence.",
+                false,
+            );
+        }
+    }
+
     /// Write a summary without an endpoint: three picked sentences, free and
     /// instant.
-    pub(crate) fn write_local_summary(&mut self, story_id: u64, chapter_id: u64) {
+    pub(crate) fn write_local_summary(&mut self, story_id: String, chapter_id: String) {
         let Some(chapter) = self
             .library
-            .story(story_id)
-            .and_then(|s| s.chapter(chapter_id))
+            .story(&story_id)
+            .and_then(|s| s.chapter(&chapter_id))
         else {
             return;
         };
         let summary = ai::local_summary(chapter);
         let body_len = chapter.body.chars().count();
         let body_hash = crate::model::content_hash(&chapter.body);
-        if let Some(story) = self.library.story_mut(story_id) {
-            if let Some(chapter) = story.chapter_mut(chapter_id) {
+        if let Some(story) = self.library.story_mut(&story_id) {
+            if let Some(chapter) = story.chapter_mut(&chapter_id) {
                 chapter.summary = summary;
                 chapter.summary_source = "local".to_string();
                 chapter.summary_body_len = body_len;
@@ -186,10 +394,66 @@ impl FolioApp {
         Some((batch.total.saturating_sub(left), batch.total))
     }
 
-    /// Stop after the chapter that is already being written.
+    /// Which block is being written, if the open chapter has more than one.
+    /// The merge pass has no block number of its own; see `summary_merging`.
+    pub(crate) fn summary_block_progress(&self) -> Option<(usize, usize)> {
+        let run = self.summary_run.as_ref()?;
+        if run.blocks.len() <= 1 {
+            return None;
+        }
+        let current = match self.job.as_ref().map(|job| &job.kind) {
+            Some(JobKind::Summary {
+                step: SummaryStep::Block(index),
+            }) => (*index + 1).min(run.blocks.len()),
+            _ => run.next.min(run.blocks.len()),
+        };
+        Some((current, run.blocks.len()))
+    }
+
+    /// True while the final pass is reading the combined block summaries.
+    pub(crate) fn summary_merging(&self) -> bool {
+        self.summary_run
+            .as_ref()
+            .is_some_and(|run| run.blocks.len() > 1 && run.next >= run.blocks.len())
+    }
+
+    /// The text to show in the summary window while it is being written: the
+    /// running summary plus the block in flight, or the merge answer alone.
+    pub(crate) fn summary_live_text(&self, story_id: String, chapter_id: String) -> Option<String> {
+        let job = self.job.as_ref()?;
+        if job.story_id != story_id || job.chapter_id != chapter_id {
+            return None;
+        }
+        let JobKind::Summary { step } = &job.kind else {
+            return None;
+        };
+        let run = self.summary_run.as_ref()?;
+        if run.story_id != story_id || run.chapter_id != chapter_id {
+            return None;
+        }
+        let mut text = String::new();
+        if !matches!(step, SummaryStep::Merge) && !run.parts.is_empty() {
+            text.push_str(&run.parts.join("\n\n"));
+            text.push_str("\n\n");
+        }
+        text.push_str(&job.stream.text);
+        Some(text)
+    }
+
+    /// Stop the whole summary run now. The running request is cancelled, the
+    /// block parts in flight are dropped, and the old chapter summary stays.
     pub(crate) fn stop_summary_batch(&mut self) {
         self.summary_queue.clear();
         self.summary_batch = None;
+        self.summary_run = None;
+        if self
+            .job
+            .as_ref()
+            .is_some_and(|job| matches!(job.kind, JobKind::Summary { .. }))
+        {
+            // Dropping the job sets the worker's cancel flag.
+            self.job = None;
+        }
         self.notify(
             "Summarizing stopped — the summaries that were already written are kept.",
             false,
@@ -213,8 +477,8 @@ impl FolioApp {
             self.summary_open = false;
             return;
         };
-        let story_id = story.id;
-        let chapter_id = chapter.id;
+        let story_id = story.key.clone();
+        let chapter_id = chapter.key.clone();
         let chapter_title = chapter.title.clone();
         let mut summary = chapter.summary.clone();
         let original_summary = summary.clone();
@@ -233,19 +497,19 @@ impl FolioApp {
             .len();
         let demo = self.library.settings.is_demo();
         let busy = self.job.is_some();
-        let progress = self.summary_progress();
+        // A summary run may be writing, retrying, or waiting for the next
+        // block. In all of those states the primary button is Stop.
+        let summary_running = self.summary_batch.is_some()
+            && (self
+                .job
+                .as_ref()
+                .is_some_and(|job| matches!(job.kind, JobKind::Summary { .. }))
+                || self.summary_run.is_some());
+        let block_progress = self.summary_block_progress();
+        let merging = self.summary_merging();
         // The live summary, when this chapter is being written right now. Read
-        // from the job, so opening the window mid-run shows the text so far.
-        let live = self.job.as_ref().and_then(|job| match job.kind {
-            JobKind::Summary {
-                story_id: job_story,
-                chapter_id: job_chapter,
-                ..
-            } if job_story == story_id && job_chapter == chapter_id => {
-                Some(job.stream.text.clone())
-            }
-            _ => None,
-        });
+        // from the run, so opening the window mid-run shows the text so far.
+        let live = self.summary_live_text(story_id, chapter_id);
         let mut open = self.summary_open;
         let mut close = false;
         let mut do_summary = false;
@@ -351,7 +615,14 @@ impl FolioApp {
                                             ui.set_width(ui.available_width());
                                             ui.horizontal(|ui| {
                                                 ui.spinner();
-                                                ui.label(caps("Writing the summary", C::muted()));
+                                                let stage = if merging {
+                                                    "Merging the summary".to_string()
+                                                } else if let Some((part, total)) = block_progress {
+                                                    format!("Writing the summary · part {part}/{total}")
+                                                } else {
+                                                    "Writing the summary".to_string()
+                                                };
+                                                ui.label(caps(&stage, C::muted()));
                                                 ui.with_layout(
                                                     Layout::right_to_left(Align::Center),
                                                     |ui| {
@@ -393,40 +664,51 @@ impl FolioApp {
                                 }
                                 ui.add_space(8.0);
                                 ui.horizontal_wrapped(|ui| {
-                                    let label = match progress {
-                                        Some((done, total)) if done < total => {
-                                            format!("Summarizing {}/{total}…", done + 1)
-                                        }
-                                        _ if busy => "Working…".to_string(),
-                                        _ => "Summarize".to_string(),
-                                    };
-                                    let button = Button::new(
-                                        RichText::new(label)
-                                            .size(11.5)
-                                            .color(Color32::WHITE)
-                                            .strong(),
-                                    )
-                                    .fill(C::accent())
-                                    .stroke(Stroke::NONE)
-                                    .corner_radius(8)
-                                    .min_size(Vec2::new(86.0, 28.0));
-                                    if ui
-                                        .add_enabled(!busy, button)
-                                        .on_hover_text(
-                                            "Write the summaries this chapter needs — including the older chapters that feed the story so far",
+                                    if summary_running {
+                                        let stop = Button::new(
+                                            RichText::new("Stop")
+                                                .size(11.5)
+                                                .strong()
+                                                .color(C::accent_deep()),
                                         )
-                                        .clicked()
-                                    {
-                                        do_summary = true;
-                                    }
-                                    if progress.is_some()
-                                        && ghost(ui, "Stop")
+                                        .fill(C::accent_soft())
+                                        .stroke(Stroke::new(1.0_f32, C::accent_soft()))
+                                        .corner_radius(8)
+                                        .min_size(Vec2::new(86.0, 28.0));
+                                        if ui
+                                            .add(stop)
                                             .on_hover_text(
-                                                "Stop after the chapter being summarized right now",
+                                                "Stop summarizing — the summaries already written stay",
                                             )
                                             .clicked()
-                                    {
-                                        do_stop = true;
+                                        {
+                                            do_stop = true;
+                                        }
+                                    } else {
+                                        let label = if busy {
+                                            "Working…".to_string()
+                                        } else {
+                                            "Summarize".to_string()
+                                        };
+                                        let button = Button::new(
+                                            RichText::new(label)
+                                                .size(11.5)
+                                                .color(Color32::WHITE)
+                                                .strong(),
+                                        )
+                                        .fill(C::accent())
+                                        .stroke(Stroke::NONE)
+                                        .corner_radius(8)
+                                        .min_size(Vec2::new(86.0, 28.0));
+                                        if ui
+                                            .add_enabled(!busy, button)
+                                            .on_hover_text(
+                                                "Write the summaries this chapter needs — including the older chapters that feed the story so far",
+                                            )
+                                            .clicked()
+                                        {
+                                            do_summary = true;
+                                        }
                                     }
                                     if older_needed > 0 {
                                         let older_label = format!(
@@ -520,16 +802,26 @@ impl FolioApp {
     // ---------------------------------------------------------------- right desk
 }
 
+/// The step the run is waiting for: the next block, or the merge pass once
+/// every block is done.
+fn expected_summary_step(run: &SummaryRun) -> SummaryStep {
+    if run.next < run.blocks.len() {
+        SummaryStep::Block(run.next)
+    } else {
+        SummaryStep::Merge
+    }
+}
+
 /// The chapters one Summarize press writes, in order: every missing older
 /// summary first, then the open chapter itself.
-pub(crate) fn summary_queue(story: &Story, position: usize, window: usize) -> Vec<u64> {
-    let mut ids: Vec<u64> = story
+pub(crate) fn summary_queue(story: &Story, position: usize, window: usize) -> Vec<String> {
+    let mut ids: Vec<String> = story
         .chapters_needing_summary(position, window)
         .into_iter()
-        .map(|chapter| chapter.id)
+        .map(|chapter| chapter.key.clone())
         .collect();
     if let Some(chapter) = story.chapters.get(position) {
-        ids.push(chapter.id);
+        ids.push(chapter.key.clone());
     }
     ids
 }

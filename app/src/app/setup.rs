@@ -11,10 +11,11 @@ impl FolioApp {
             requested: false,
         });
         let screenshot_mode = shot.is_some();
-        let (library, store_path) = if shot.is_some() {
-            (Library::sample(), None)
+        let (library, store, load_report) = if shot.is_some() {
+            (Library::sample(), None, crate::model::LoadReport::default())
         } else {
-            crate::model::load_library()
+            let (library, store, report) = Store::open(&crate::model::data_dir());
+            (library, Some(store), report)
         };
         // The library may name an installed font; install let the default
         // system serif stand in until the file is known.
@@ -44,7 +45,7 @@ impl FolioApp {
         }
         let confirm = match debug_view.as_str() {
             "delete-story" => library.stories.first().map(|story| Confirm::Story {
-                story_id: story.id,
+                story_id: story.key.clone(),
                 title: story.title.clone(),
                 chapters: story.chapters.len(),
                 lore: story.lore.len(),
@@ -54,8 +55,8 @@ impl FolioApp {
                 .get(active_story)
                 .and_then(|story| story.chapters.get(active_chapter).map(|c| (story, c)))
                 .map(|(story, chapter)| Confirm::Chapter {
-                    story_id: story.id,
-                    chapter_id: chapter.id,
+                    story_id: story.key.clone(),
+                    chapter_id: chapter.key.clone(),
                     story_title: story.title.clone(),
                     title: chapter.title.clone(),
                     number: active_chapter + 1,
@@ -67,15 +68,36 @@ impl FolioApp {
                 .get(active_story)
                 .and_then(|story| story.chapters.get(active_chapter).map(|c| (story, c)))
                 .map(|(story, chapter)| Confirm::Chat {
-                    story_id: story.id,
-                    chapter_id: chapter.id,
+                    story_id: story.key.clone(),
+                    chapter_id: chapter.key.clone(),
+                }),
+            "long-confirm" => library
+                .stories
+                .get(active_story)
+                .map(|story| Confirm::Replace {
+                    query: "the door that was not a door and the wall that was not a wall "
+                        .repeat(4),
+                    replacement: "the gate that was not a gate ".repeat(4),
+                    match_case: false,
+                    matches: 24,
+                    chapters: 12,
+                    story_title: format!(
+                        "{} — A Chronicle of the Drowned Harbour and Its Many Doors",
+                        story.title
+                    ),
+                    chapter_id: None,
+                    chapter_title: String::new(),
                 }),
             _ => None,
         };
         let (story_title_draft, story_premise_draft, story_editor_story_id) =
             if debug_view == "story-editor" {
                 match library.stories.get(active_story) {
-                    Some(story) => (story.title.clone(), story.premise.clone(), Some(story.id)),
+                    Some(story) => (
+                        story.title.clone(),
+                        story.premise.clone(),
+                        Some(story.key.clone()),
+                    ),
                     None => (String::new(), String::new(), None),
                 }
             } else {
@@ -87,8 +109,8 @@ impl FolioApp {
                 .get(active_story)
                 .and_then(|story| story.chapters.get(active_chapter))
                 .map(|chapter| ChapterDraft {
-                    story_id: library.stories[active_story].id,
-                    chapter_id: chapter.id,
+                    story_id: library.stories[active_story].key.clone(),
+                    chapter_id: chapter.key.clone(),
                     title: chapter.title.clone(),
                     summary: chapter.summary.clone(),
                 })
@@ -107,7 +129,7 @@ impl FolioApp {
             .unwrap_or_default();
         let mut app = Self {
             library,
-            store_path,
+            store,
             shot,
             active_story,
             active_chapter,
@@ -146,6 +168,7 @@ impl FolioApp {
             ai_input: String::new(),
             job: None,
             summary_queue: VecDeque::new(),
+            summary_run: None,
             summary_batch: None,
             models: Vec::new(),
             models_from: String::new(),
@@ -158,6 +181,7 @@ impl FolioApp {
             toast: None,
             dirty: false,
             last_edit: Instant::now(),
+            save_retry_at: None,
             summary_open: false,
             find_open: debug_view == "find" || debug_view == "find-replace",
             find_query: if debug_view == "find" || debug_view == "find-replace" {
@@ -218,15 +242,26 @@ impl FolioApp {
         if debug_view == "undo-toast" {
             if let Some(story) = app.library.stories.get(app.active_story) {
                 if let Some(chapter) = story.chapters.get(app.active_chapter) {
-                    app.delete_chapter_now(story.id, chapter.id);
+                    app.delete_chapter_now(story.key.clone(), chapter.key.clone());
                 }
             }
+        }
+        if debug_view == "accept-toast" {
+            app.notify("Added the AI draft to the end of the chapter.", false);
+        }
+        if debug_view == "long-toast" {
+            app.notify(
+                "The AI request failed: Could not reach the endpoint at \
+                 http://192.168.10.20:5001/v1/chat/completions. Check the address \
+                 and your connection. (connection refused)",
+                true,
+            );
         }
         if debug_view == "find-jump" {
             if let Some(story) = app.library.stories.get(app.active_story) {
                 if let Some(chapter) = story.chapters.get(app.active_chapter) {
                     if let Some(range) = find_char_ranges(&chapter.body, "door", false).first() {
-                        app.pending_selection = Some((chapter.id, range.clone()));
+                        app.pending_selection = Some((chapter.key.clone(), range.clone()));
                     }
                 }
             }
@@ -277,17 +312,17 @@ impl FolioApp {
             let story_id = app.story_id();
             if let Some(chapter_id) = app
                 .library
-                .story(story_id)
+                .story(&story_id)
                 .and_then(|story| story.chapters.get(1))
-                .map(|chapter| chapter.id)
+                .map(|chapter| chapter.key.clone())
             {
-                app.delete_chapter_now(story_id, chapter_id);
+                app.delete_chapter_now(story_id.clone(), chapter_id);
             }
             if let Some(entry_id) = app
                 .library
-                .story(story_id)
+                .story(&story_id)
                 .and_then(|story| story.lore.get(2))
-                .map(|entry| entry.id)
+                .map(|entry| entry.key.clone())
             {
                 app.delete_lore_now(story_id, entry_id);
             }
@@ -298,7 +333,7 @@ impl FolioApp {
                 .stories
                 .get(app.active_story)
                 .and_then(|story| story.lore.first())
-                .map(|entry| entry.id)
+                .map(|entry| entry.key.clone())
             {
                 app.edit_lore(Some(entry_id));
             }
@@ -316,8 +351,8 @@ impl FolioApp {
             if let Some(story) = story {
                 if let Some(entry) = story.lore.first() {
                     app.lore_proposal = Some(LoreProposal {
-                        story_id: story.id,
-                        target: Some(entry.id),
+                        story_id: story.key.clone(),
+                        target: Some(entry.key.clone()),
                         name: entry.name.clone(),
                         category: entry.category.clone(),
                         aliases: String::new(),
@@ -334,8 +369,8 @@ impl FolioApp {
             // live bubble and its follow-scroll are visible.
             if let Some(story) = app.library.stories.get_mut(app.active_story) {
                 if let Some(chapter) = story.chapters.get_mut(app.active_chapter) {
-                    let story_id = story.id;
-                    let chapter_id = chapter.id;
+                    let story_id = story.key.clone();
+                    let chapter_id = chapter.key.clone();
                     chapter.chat = vec![ChatMessage {
                         role: "user".to_string(),
                         text: "What should Fluttershy do about the creature?".to_string(),
@@ -364,8 +399,8 @@ impl FolioApp {
             // progress hint are visible.
             if let Some(story) = app.library.stories.get(app.active_story) {
                 if let Some(chapter) = story.chapters.get(app.active_chapter) {
-                    let story_id = story.id;
-                    let chapter_id = chapter.id;
+                    let story_id = story.key.clone();
+                    let chapter_id = chapter.key.clone();
                     let base_hash = crate::model::content_hash(&chapter.body);
                     let (tx, rx) = mpsc::channel::<StreamEvent>();
                     // Keep the sender alive: no Done is ever sent.
@@ -389,8 +424,15 @@ impl FolioApp {
             // block, the word count and Stop are visible.
             if let Some(story) = app.library.stories.get(app.active_story) {
                 if let Some(chapter) = story.chapters.get(app.active_chapter) {
-                    let story_id = story.id;
-                    let chapter_id = chapter.id;
+                    let story_id = story.key.clone();
+                    let chapter_id = chapter.key.clone();
+                    let source = chapter.body.clone();
+                    let mid = source
+                        .char_indices()
+                        .nth(source.chars().count() / 2)
+                        .map(|(index, _)| index)
+                        .unwrap_or(source.len());
+                    let blocks = vec![0..mid, mid..source.len()];
                     let asked_title = chapter.title.clone();
                     let mut stream = StreamFold::default();
                     stream.text = "Mira finds her mother's house sealed with a wall of warm \
@@ -400,16 +442,24 @@ opens the garden gate instead."
                     let (tx, rx) = mpsc::channel::<StreamEvent>();
                     // Keep the sender alive: no Done is ever sent.
                     std::mem::forget(tx);
+                    app.summary_run = Some(SummaryRun {
+                        story_id: story_id.clone(),
+                        chapter_id: chapter_id.clone(),
+                        base_len: source.chars().count(),
+                        base_hash: crate::model::content_hash(&source),
+                        source,
+                        blocks,
+                        next: 0,
+                        parts: Vec::new(),
+                        attempts: 0,
+                    });
                     app.summary_batch = Some(SummaryBatch {
                         total: 1,
                         asked_title,
                     });
                     app.job = Some(Job {
                         kind: JobKind::Summary {
-                            story_id,
-                            chapter_id,
-                            base_len: chapter.body.chars().count(),
-                            base_hash: crate::model::content_hash(&chapter.body),
+                            step: SummaryStep::Block(0),
                         },
                         story_id,
                         chapter_id,
@@ -600,8 +650,8 @@ opens the garden gate instead."
             let target = app.library.stories.get(app.active_story).and_then(|story| {
                 story.chapters.get(app.active_chapter).map(|chapter| {
                     (
-                        story.id,
-                        chapter.id,
+                        story.key.clone(),
+                        chapter.key.clone(),
                         chapter.body.chars().count(),
                         crate::model::content_hash(&chapter.body),
                     )
@@ -627,8 +677,8 @@ carrying the smell of cold iron, and the house settled around her as if it had b
                 if debug_view == "draft-ready" {
                     if let Some(chapter) = app
                         .library
-                        .story_mut(story_id)
-                        .and_then(|story| story.chapter_mut(chapter_id))
+                        .story_mut(&story_id)
+                        .and_then(|story| story.chapter_mut(&chapter_id))
                     {
                         chapter.draft = Some(draft);
                     }
@@ -639,16 +689,16 @@ carrying the smell of cold iron, and the house settled around her as if it had b
                     std::mem::forget(tx);
                     app.job = Some(Job {
                         kind: JobKind::Action(Action::Continue),
-                        story_id,
-                        chapter_id,
+                        story_id: story_id.clone(),
+                        chapter_id: chapter_id.clone(),
                         stream: StreamFold::default(),
                         rx,
                         cancel: Arc::new(AtomicBool::new(false)),
                         _started: Instant::now(),
                     });
                     app.draft_live = Some(LiveDraft {
-                        story_id,
-                        chapter_id,
+                        story_id: story_id.clone(),
+                        chapter_id: chapter_id.clone(),
                         draft,
                     });
                 }
@@ -676,6 +726,19 @@ carrying the smell of cold iron, and the house settled around her as if it had b
             // "Test connection" — once, so the lamp is honest from the start.
             app.start_test();
         }
+        if load_report.migrated {
+            let note = match &load_report.backup {
+                Some(backup) => format!(
+                    "Your library was moved to one file per book. The old library is kept at {}.",
+                    backup.display()
+                ),
+                None => "Your library was moved to one file per book.".to_string(),
+            };
+            app.notify(note, false);
+        }
+        if !load_report.warnings.is_empty() {
+            app.notify(load_report.warnings.join(" "), true);
+        }
         app
     }
 
@@ -697,12 +760,12 @@ carrying the smell of cold iron, and the house settled around her as if it had b
         self.library.active_story = self.active_story;
     }
 
-    pub(crate) fn story_id(&self) -> u64 {
+    pub(crate) fn story_id(&self) -> String {
         self.library
             .stories
             .get(self.active_story)
-            .map(|s| s.id)
-            .unwrap_or(0)
+            .map(|story| story.key.clone())
+            .unwrap_or_default()
     }
 
     pub(crate) fn notify(&mut self, text: impl Into<String>, error: bool) {
@@ -744,15 +807,18 @@ carrying the smell of cold iron, and the house settled around her as if it had b
         if self.shot.is_some() {
             return;
         }
-        let Some(path) = self.store_path.clone() else {
-            return;
+        let result = match self.store.as_mut() {
+            Some(store) => store.save(&self.library),
+            None => return,
         };
-        match crate::model::save_library(&path, &self.library) {
+        match result {
             Ok(()) => {
                 self.dirty = false;
+                self.save_retry_at = None;
             }
-            Err(error) => {
-                self.notify(error, true);
+            Err(errors) => {
+                self.save_retry_at = Some(Instant::now() + Duration::from_secs(5));
+                self.notify(errors.join(" "), true);
             }
         }
     }
@@ -760,6 +826,7 @@ carrying the smell of cold iron, and the house settled around her as if it had b
     pub(crate) fn mark_dirty(&mut self) {
         self.dirty = true;
         self.last_edit = Instant::now();
+        self.save_retry_at = None;
     }
 
     pub(crate) fn switch_story(&mut self, index: usize) {
@@ -824,6 +891,13 @@ carrying the smell of cold iron, and the house settled around her as if it had b
 
     pub(crate) fn autosave(&mut self, ctx: &egui::Context) {
         if self.dirty && self.shot.is_none() {
+            if let Some(until) = self.save_retry_at {
+                let now = Instant::now();
+                if now < until {
+                    ctx.request_repaint_after(until - now);
+                    return;
+                }
+            }
             if self.last_edit.elapsed() >= Duration::from_millis(700) {
                 self.save_now();
             } else {

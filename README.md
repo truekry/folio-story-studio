@@ -1,6 +1,6 @@
 # Folio – Story Studio
 
-![Version](https://img.shields.io/badge/version-0.1.0-blue)
+![Version](https://img.shields.io/badge/version-0.1.1-blue)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Rust](https://img.shields.io/badge/Rust-2021-orange)
@@ -28,13 +28,32 @@ The app needs no account and no cloud. It talks to any OpenAI-compatible API –
 a local model on your home network as well as a remote service. With no
 endpoint configured, a demo writer steps in so you can try everything.
 
-**Status:** version 0.1.0 – an early but usable release. The library and all
+**Status:** version 0.1.1 – an early but usable release. The library and all
 features are in place, and changes are saved automatically.
+
+## What is new in 0.1.1
+
+- **Readable messages:** confirmation dialogs and toasts wrap long text, and
+  their buttons stay reachable in small windows.
+- **Settings that fit:** the window scrolls, while **Done** waits in a fixed
+  footer at the bottom.
+- **Block-wise summaries:** a long chapter is summarised in blocks of about
+  1,200 words and then merged into one continuous text. The word target in the
+  prompt editor applies per block, and the Summarize button turns into **Stop**
+  while a run is going.
+- **Split storage:** the library is now `config.json` plus one file per book
+  under `stories\`. An old single `library.json` is converted on first start.
+- **Stable keys instead of numeric ids:** books, chapters and lore entries are
+  identified by short keys such as `A43K`, `A43K-001` and `A43K-L001`. The keys
+  are internal bookkeeping and are not shown in the interface.
 
 ## Features
 
 - **Story library** with chapters, word counts and a story bible (premise,
-  lorebook) – all in one local file.
+  lorebook) – settings in `config.json` and one file per book under `stories\`.
+- **Stable keys:** every book has a four-character key such as `A43K`; chapters
+  are `A43K-001`, `A43K-002`, … and lore entries `A43K-L001`, …. The keys are
+  internal and never appear in the interface.
 - **Continue scene**: the answer grows as a coloured draft below the chapter.
   Only **Accept** writes it in; next to it are **Delete**, **Retry**, and
   **Stop** while it is still streaming.
@@ -46,8 +65,10 @@ features are in place, and changes are saved automatically.
   conversations are condensed so the context window lasts.
 - **Lorebook** with categories, aliases, trigger words and pinning. On request
   the AI suggests new entries from a passage.
-- **Summaries** in their own window and as long-term memory. Older chapters
-  without a usable summary are caught up on request.
+- **Summaries** in their own window and as long-term memory. A chapter is
+  summarised in blocks of about 1,200 words, each block on its own, and the
+  blocks are merged into one text afterwards. Older chapters without a usable
+  summary are caught up on request; a running pass can be stopped.
 - **Find and replace** in the open chapter or the whole book, with undo.
 - **Spelling and grammar** checked paragraph by paragraph, with suggestions
   accepted one at a time.
@@ -56,6 +77,9 @@ features are in place, and changes are saved automatically.
   answers, and how large its context window is.
 - **Light and dark** following the system setting, plus system fonts and a
   selectable text size for the desk.
+- **Readable everywhere:** long messages, warnings and confirmation dialogs
+  wrap instead of running out of the window; the Settings window scrolls and
+  keeps its footer in place.
 
 ## Download
 
@@ -105,7 +129,7 @@ cd app
 cargo test
 ```
 
-125 tests pass on any machine. Five more are integration tests against a real
+159 tests pass on any machine. Six more are integration tests against a real
 OpenAI-compatible endpoint; they are marked `#[ignore]` so the normal run stays
 offline and fast. Point them at your own endpoint and include the ignored
 tests:
@@ -117,11 +141,16 @@ FOLIO_LAN_URL=http://localhost:1234/v1 cargo test -- --include-ignored --test-th
 `FOLIO_LAN_MODEL` and `FOLIO_LAN_API_KEY` are optional; without a model name the
 endpoint's loaded model answers. On Windows PowerShell, set the variable first
 with `$env:FOLIO_LAN_URL="http://localhost:1234/v1"`. The tests use the built-in
-sample story and need a model that follows instructions; they take about a
-minute. The tests cover, among other things, the SSE stream including
+sample story and need a model that follows instructions; they take about two
+minutes. The tests cover, among other things, the SSE stream including
 cancellation and continuation, the draft lifecycle, prompt composition,
-lorebook matching, loading and saving older libraries, file names and the PDF
-writer.
+lorebook matching, block-wise summaries and their merge, loading and saving
+older libraries, the migration from `library.json` to `config.json` plus one
+file per book, story/chapter/lore keys, and the PDF writer.
+
+Some of these tests depend on what the model actually answers. A small local
+model may occasionally return a special token or a repetition loop instead of
+text; the offline suite is unaffected.
 
 ## Project layout
 
@@ -132,8 +161,8 @@ app/
 │   │               dialogs and the stateful actions
 │   ├── ai/         prompts, endpoint, streaming, lore suggestions, proofreading,
 │   │               budgets and the demo writer
-│   ├── model/      library, story/chapter/draft, settings,
-│   │               saving, file names and export
+│   ├── model/      library, story/chapter/draft, settings, keys,
+│   │               store (config.json, one file per book), export
 │   ├── pdf/        small PDF writer without external dependencies
 │   ├── theme.rs    colours for day and night
 │   ├── fonts.rs    system fonts
@@ -153,15 +182,18 @@ place.
 
 ## Data and privacy
 
-- The library lives in `%APPDATA%\Folio\library.json` (on Linux/macOS:
-  `~/.folio/library.json`).
-- The file is readable JSON and **also contains the endpoint address, the model
-  name and, if set, the API key in plain text**. Keep it out of repositories
-  and out of cloud backups you share.
+- Settings live in `%APPDATA%\Folio\config.json`; every book has its own file in
+  `%APPDATA%\Folio\stories\<key>.json` (on Linux/macOS: `~/.folio/`).
+- An older single `library.json` is converted once on start. The old file is
+  kept as `library.json.migrated-*` next to the new layout.
+- These files are readable JSON and **also contain the endpoint address, the
+  model name and, if set, the API key in plain text**. Keep them out of
+  repositories and out of cloud backups you share.
 - Folio sends no telemetry. Network traffic goes only to the configured
   endpoint.
-- If a library file cannot be read, Folio makes a copy as `library.json.bak`
-  before overwriting it.
+- If a book file cannot be read, Folio sets it aside as `*.broken-*` and keeps
+  loading the other books. A broken `config.json` is handled the same way and
+  replaced with defaults or the migrated settings.
 
 ## Screenshots
 
@@ -186,7 +218,8 @@ and where the line stays.
   came from here.
 - **DeepSeek V4.1 Flash** – code, tests and documentation, written together
   with the author in OpenCode. That includes the move from one large file to
-  today's module layout and the bug hunt with regression tests.
+  today's module layout, the bug hunt with regression tests, the block-wise
+  summaries and the split storage with story keys.
 
 The source is deliberately not hidden as "generated by an AI": the modules are
 commented, the tests are readable, and anyone who wants to work on this should
@@ -195,5 +228,3 @@ be able to do so with the full picture.
 ## License
 
 MIT – see [`LICENSE`](LICENSE).
-
-Copyright © 2026 truekry and DeepSeek V4.1 Flash.

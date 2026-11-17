@@ -46,6 +46,7 @@ impl FolioApp {
             Some(UndoAction::Delete(_)) => "Undo delete",
             None => "",
         };
+        let max_width = toast_width(ctx.screen_rect().width());
         let mut undo_clicked = false;
         egui::Area::new(Id::new("toast"))
             .anchor(Align2::CENTER_BOTTOM, Vec2::new(0.0, -18.0))
@@ -56,38 +57,40 @@ impl FolioApp {
                     .corner_radius(10)
                     .inner_margin(Margin::symmetric(14, 9))
                     .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.add(
-                                Label::new(
-                                    RichText::new(text).size(12.0).color(C::on_toast()),
-                                )
+                        // The text gets a real column to wrap in. The action
+                        // sits below it instead of stealing width from the
+                        // sentence, which is what made long notices unreadable.
+                        ui.set_max_width(max_width);
+                        ui.add(
+                            Label::new(RichText::new(text).size(12.0).color(C::on_toast()))
                                 .wrap(),
-                            );
-                            if undo.is_some() {
-                                ui.add_space(8.0);
-                                if ui
-                                    .add(
-                                        Button::new(
-                                            RichText::new(undo_label)
-                                                .size(11.5)
-                                                .strong()
-                                                .color(C::ink()),
-                                        )
-                                        .fill(C::card())
-                                        .corner_radius(6),
+                        );
+                        if undo.is_some() {
+                            ui.add_space(6.0);
+                            if ui
+                                .add(
+                                    Button::new(
+                                        RichText::new(undo_label)
+                                            .size(11.5)
+                                            .strong()
+                                            .color(C::ink()),
                                     )
-                                    .on_hover_text(match &undo {
-                                        Some(UndoAction::Replace(_)) => {
-                                            "Put the previous chapter text back"
-                                        }
-                                        _ => "Put it back — it stays available in Deleted until Folio closes",
-                                    })
-                                    .clicked()
-                                {
-                                    undo_clicked = true;
-                                }
+                                    .fill(C::card())
+                                    .corner_radius(6),
+                                )
+                                .on_hover_text(match &undo {
+                                    Some(UndoAction::Replace(_)) => {
+                                        "Put the previous chapter text back"
+                                    }
+                                    _ => {
+                                        "Put it back — it stays available in Deleted until Folio closes"
+                                    }
+                                })
+                                .clicked()
+                            {
+                                undo_clicked = true;
                             }
-                        });
+                        }
                     });
             });
         if undo_clicked {

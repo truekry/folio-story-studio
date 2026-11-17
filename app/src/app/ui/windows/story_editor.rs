@@ -69,8 +69,9 @@ impl FolioApp {
             }
             let story_id = self
                 .story_editor_story_id
+                .clone()
                 .unwrap_or_else(|| self.story_id());
-            if let Some(story) = self.library.story_mut(story_id) {
+            if let Some(story) = self.library.story_mut(&story_id) {
                 story.title = title;
                 story.premise = self.story_premise_draft.trim().to_string();
             }

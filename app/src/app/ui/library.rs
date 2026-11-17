@@ -4,14 +4,22 @@ use super::*;
 
 impl FolioApp {
     pub(crate) fn ui_left(&mut self, ctx: &egui::Context) {
-        let stories: Vec<(usize, u64, String, usize, usize)> = self
+        let stories: Vec<(usize, String, String, usize, usize)> = self
             .library
             .stories
             .iter()
             .enumerate()
-            .map(|(i, s)| (i, s.id, s.title.clone(), s.chapters.len(), s.words()))
+            .map(|(i, s)| {
+                (
+                    i,
+                    s.key.clone(),
+                    s.title.clone(),
+                    s.chapters.len(),
+                    s.words(),
+                )
+            })
             .collect();
-        let chapters: Vec<(usize, u64, String, usize, &'static str)> = self
+        let chapters: Vec<(usize, String, String, usize, &'static str)> = self
             .library
             .stories
             .get(self.active_story)
@@ -19,7 +27,15 @@ impl FolioApp {
                 s.chapters
                     .iter()
                     .enumerate()
-                    .map(|(i, c)| (i, c.id, c.title.clone(), c.words(), c.summary_state()))
+                    .map(|(i, c)| {
+                        (
+                            i,
+                            c.key.clone(),
+                            c.title.clone(),
+                            c.words(),
+                            c.summary_state(),
+                        )
+                    })
                     .collect()
             })
             .unwrap_or_default();
@@ -42,8 +58,8 @@ impl FolioApp {
         let mut pick_chapter = None;
         let mut want_new_chapter = false;
         let mut want_new_story = false;
-        let mut story_menu: Option<(u64, StoryMenu)> = None;
-        let mut chapter_menu: Option<(u64, ChapterMenu)> = None;
+        let mut story_menu: Option<(String, StoryMenu)> = None;
+        let mut chapter_menu: Option<(String, ChapterMenu)> = None;
 
         egui::SidePanel::left("library")
             .exact_width(266.0)
@@ -107,7 +123,7 @@ impl FolioApp {
                         }
                     });
                     if picked.is_some() {
-                        story_menu = picked.map(|action| (*story_id, action));
+                        story_menu = picked.map(|action| (story_id.clone(), action));
                     }
                     ui.add_space(1.0);
                 }
@@ -169,7 +185,7 @@ impl FolioApp {
                             }
                         });
                         if picked.is_some() {
-                            chapter_menu = picked.map(|action| (*chapter_id, action));
+                            chapter_menu = picked.map(|action| (chapter_id.clone(), action));
                         }
                         ui.add_space(1.0);
                     }

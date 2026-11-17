@@ -509,9 +509,9 @@ fn a_summary_press_covers_the_missing_older_chapters_first() {
     assert_eq!(
         ids,
         vec![
-            story.chapters[0].id,
-            story.chapters[1].id,
-            story.chapters[2].id
+            story.chapters[0].key.clone(),
+            story.chapters[1].key.clone(),
+            story.chapters[2].key.clone()
         ]
     );
 
@@ -519,7 +519,7 @@ fn a_summary_press_covers_the_missing_older_chapters_first() {
     let library = crate::model::Library::sample();
     let story = &library.stories[0];
     let ids = summary_queue(story, 2, 2);
-    assert_eq!(ids, vec![story.chapters[2].id]);
+    assert_eq!(ids, vec![story.chapters[2].key.clone()]);
 }
 
 #[test]
@@ -695,4 +695,41 @@ fn a_right_click_keeps_the_text_selection_and_opens_the_menu() {
             .is_some_and(|range| range.primary.index != range.secondary.index),
         "the highlight must still be visible"
     );
+}
+
+#[test]
+fn notices_stay_readable_on_a_narrow_window() {
+    // The normal window is 1040 px at its narrowest; the notice may use a
+    // comfortable column but must leave the edges alone.
+    let width = toast_width(1040.0);
+    assert!(width >= 320.0, "the text column must not collapse: {width}");
+    assert!(
+        width <= 620.0,
+        "the notice must not grow with its text: {width}"
+    );
+
+    for screen in [360.0, 640.0, 1040.0, 1440.0, 2560.0] {
+        let width = toast_width(screen);
+        assert!(width > 0.0, "screen {screen}");
+        assert!(
+            width <= screen - 24.0,
+            "toast {width} does not fit a {screen} px window"
+        );
+    }
+}
+
+#[test]
+fn confirmations_fit_the_window_they_open_in() {
+    let width = confirm_width(1040.0);
+    assert!(width >= 320.0, "the dialog text must have room: {width}");
+    assert!(width <= 460.0, "the dialog must not become a page: {width}");
+
+    for screen in [360.0, 640.0, 1040.0, 1440.0, 2560.0] {
+        let width = confirm_width(screen);
+        assert!(width > 0.0, "screen {screen}");
+        assert!(
+            width <= screen - 40.0,
+            "dialog {width} does not fit a {screen} px window"
+        );
+    }
 }

@@ -52,7 +52,7 @@ impl FolioApp {
                         ui.add(
                             Label::new(
                                 RichText::new(
-                                    "Each function has its own instruction and a length to aim for. Changing a text replaces the built-in wording; an empty field means the built-in one is used. No limit removes the length request and lets the answer use the room the endpoint leaves. Settings save themselves.",
+                                    "Each function has its own instruction and a length to aim for. Changing a text replaces the built-in wording; an empty field means the built-in one is used. No limit removes the length request and lets the answer use the room the endpoint leaves. For the chapter summary, the length applies to each block; the final merge keeps all block facts and has no separate target. Settings save themselves.",
                                 )
                                 .size(9.5)
                                 .color(C::muted()),

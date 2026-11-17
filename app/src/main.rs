@@ -33,6 +33,11 @@ fn main() -> eframe::Result<()> {
     }
 
     if screenshot.is_some() {
+        // Reproducible screenshots at the smallest window, without changing
+        // what a normal run uses.
+        if let Some(size) = debug_window_size() {
+            viewport = viewport.with_inner_size(size);
+        }
         // A check must never pull focus away from whatever the person is doing.
         viewport = viewport.with_active(false);
         #[cfg(target_os = "windows")]
@@ -70,6 +75,20 @@ fn app_icon() -> Option<egui::IconData> {
     })
 }
 
+/// A size for screenshot checks: `FOLIO_WINDOW=1040x680`. Only read in
+/// screenshot mode, so a normal run keeps the size the user chose.
+fn debug_window_size() -> Option<[f32; 2]> {
+    parse_window_size(&std::env::var("FOLIO_WINDOW").ok()?)
+}
+
+fn parse_window_size(value: &str) -> Option<[f32; 2]> {
+    let (width, height) = value.split_once('x').or_else(|| value.split_once('X'))?;
+    let width: f32 = width.trim().parse().ok()?;
+    let height: f32 = height.trim().parse().ok()?;
+    (width >= 320.0 && height >= 240.0 && width.is_finite() && height.is_finite())
+        .then_some([width, height])
+}
+
 fn parse_args() -> (Option<PathBuf>, bool) {
     let mut screenshot = None;
     let mut help = false;
@@ -95,6 +114,15 @@ fn parse_args() -> (Option<PathBuf>, bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_debug_window_size_is_parsed_without_accepting_tiny_windows() {
+        assert_eq!(parse_window_size("1040x680"), Some([1040.0, 680.0]));
+        assert_eq!(parse_window_size(" 1200 X 800 "), Some([1200.0, 800.0]));
+        assert_eq!(parse_window_size("1040"), None);
+        assert_eq!(parse_window_size("1040x"), None);
+        assert_eq!(parse_window_size("100x100"), None);
+    }
 
     #[test]
     fn the_window_icon_decodes_to_a_square_image() {

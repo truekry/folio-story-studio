@@ -14,6 +14,8 @@ impl FolioApp {
 
         let mut confirmed = false;
         let mut cancelled = false;
+        let width = confirm_width(ctx.screen_rect().width());
+        let body_height = (ctx.screen_rect().height() - 280.0).clamp(140.0, 420.0);
         let modal = Modal::new(Id::new("delete-confirm"))
             .frame(
                 Frame::NONE
@@ -24,7 +26,7 @@ impl FolioApp {
             )
             .backdrop_color(Color32::from_black_alpha(110))
             .show(ctx, |ui| {
-                ui.set_width(430.0);
+                ui.set_width(width);
                 let (eyebrow, heading, detail, keep_label, delete_label, danger) = match &confirm {
                     Confirm::Story {
                         title,
@@ -164,40 +166,53 @@ impl FolioApp {
                     "The notice right afterwards offers Undo, and every chapter summary asks for a refresh."
                 };
 
-                ui.label(
-                    RichText::new(eyebrow)
-                        .size(9.5)
-                        .strong()
-                        .color(if danger { C::red() } else { C::accent_deep() }),
-                );
-                ui.add_space(4.0);
-                ui.add(
-                    Label::new(
-                        RichText::new(heading)
-                            .font(serif_id(24.0))
-                            .color(C::ink()),
-                    )
-                    .wrap(),
-                );
-                ui.add_space(7.0);
-                ui.add(
-                    Label::new(
-                        RichText::new(detail)
-                            .size(12.0)
-                            .color(C::ink_soft())
-                            .line_height(Some(18.0)),
-                    )
-                    .wrap(),
-                );
-                ui.add_space(5.0);
-                ui.label(
-                    RichText::new(note)
-                        .size(10.0)
-                        .italics()
-                        .color(C::muted()),
-                );
+                // A long title or a long lore description must not push the
+                // buttons off the screen. The text scrolls inside a bounded
+                // column; the two decisions stay fixed below it.
+                ScrollArea::vertical()
+                    .id_salt("confirm-body")
+                    .max_height(body_height)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        ui.set_width(width);
+                        ui.label(
+                            RichText::new(eyebrow)
+                                .size(9.5)
+                                .strong()
+                                .color(if danger { C::red() } else { C::accent_deep() }),
+                        );
+                        ui.add_space(4.0);
+                        ui.add(
+                            Label::new(
+                                RichText::new(heading)
+                                    .font(serif_id(24.0))
+                                    .color(C::ink()),
+                            )
+                            .wrap(),
+                        );
+                        ui.add_space(7.0);
+                        ui.add(
+                            Label::new(
+                                RichText::new(detail)
+                                    .size(12.0)
+                                    .color(C::ink_soft())
+                                    .line_height(Some(18.0)),
+                            )
+                            .wrap(),
+                        );
+                        ui.add_space(5.0);
+                        ui.add(
+                            Label::new(
+                                RichText::new(note)
+                                    .size(10.0)
+                                    .italics()
+                                    .color(C::muted()),
+                            )
+                            .wrap(),
+                        );
+                    });
                 ui.add_space(14.0);
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     let keep = Button::new(
                         RichText::new(keep_label).size(12.0).strong().color(C::ink()),
                     )
@@ -223,10 +238,13 @@ impl FolioApp {
                     }
                 });
                 ui.add_space(2.0);
-                ui.label(
-                    RichText::new("Escape or a click outside keeps everything.")
-                        .size(9.5)
-                        .color(C::muted()),
+                ui.add(
+                    Label::new(
+                        RichText::new("Escape or a click outside keeps everything.")
+                            .size(9.5)
+                            .color(C::muted()),
+                    )
+                    .wrap(),
                 );
             });
 

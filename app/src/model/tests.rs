@@ -232,32 +232,36 @@ fn an_old_summary_without_a_fingerprint_uses_the_length_check() {
 fn deleting_a_story_keeps_the_library_consistent() {
     let mut library = Library::sample();
     library.active_story = 1;
-    let removed = library.delete_story(2).expect("story removed");
+    let second = library.stories[1].key.clone();
+    let first = library.stories[0].key.clone();
+    let removed = library.delete_story(&second).expect("story removed");
     assert_eq!(removed.title, "The Orchard at Night");
     assert_eq!(library.stories.len(), 1);
     assert_eq!(library.active_story, 0);
 
-    let last = library.delete_story(1).expect("last story removed");
+    let last = library.delete_story(&first).expect("last story removed");
     assert_eq!(last.chapters.len(), 3);
     assert!(library.stories.is_empty());
     assert_eq!(library.active_story, 0);
-    assert!(library.delete_story(1).is_none());
+    assert!(library.delete_story(&first).is_none());
 }
 
 #[test]
 fn deleting_another_story_keeps_the_open_one() {
     let mut library = Library::sample();
     let mut third = library.stories[1].clone();
-    third.id = 3;
+    third.key = "ZZZZ".to_string();
     third.title = "A Third Shelf".to_string();
     library.stories.push(third);
     library.active_story = 2;
-    let open_id = library.stories[2].id;
+    let open_key = library.stories[2].key.clone();
 
     // Delete the first story while the last one is open.
-    library.delete_story(1).expect("story removed");
+    library
+        .delete_story(&library.stories[0].key.clone())
+        .expect("story removed");
     assert_eq!(
-        library.stories[library.active_story].id, open_id,
+        library.stories[library.active_story].key, open_key,
         "deleting an earlier story must not switch the open one"
     );
 }
@@ -266,12 +270,14 @@ fn deleting_another_story_keeps_the_open_one() {
 fn deleting_another_chapter_keeps_the_open_one() {
     let mut story = Library::sample().stories[0].clone();
     story.open_chapter = 2;
-    let open_chapter_id = story.chapters[2].id;
+    let open_chapter_key = story.chapters[2].key.clone();
 
     // Delete the first chapter while the third one is open.
-    story.delete_chapter(11).expect("chapter removed");
+    story
+        .delete_chapter(&story.chapters[0].key.clone())
+        .expect("chapter removed");
     assert_eq!(
-        story.chapters[story.open_chapter].id, open_chapter_id,
+        story.chapters[story.open_chapter].key, open_chapter_key,
         "deleting an earlier chapter must not switch the open one"
     );
 }
@@ -280,16 +286,20 @@ fn deleting_another_chapter_keeps_the_open_one() {
 fn deleting_a_chapter_keeps_the_rest_of_the_story() {
     let mut story = Library::sample().stories[0].clone();
     story.open_chapter = 1;
-    let removed = story.delete_chapter(12).expect("chapter removed");
+    let removed = story
+        .delete_chapter(&story.chapters[1].key.clone())
+        .expect("chapter removed");
     assert_eq!(removed.title, "A House With No Door");
     assert_eq!(story.chapters.len(), 2);
     assert_eq!(story.open_chapter, 1);
-    assert!(story.chapter(11).is_some());
-    assert!(story.chapter(12).is_none());
-    assert!(story.chapter(13).is_some());
+    assert!(story.chapter(&story.chapters[0].key).is_some());
+    assert!(story.chapter(&removed.key).is_none());
+    assert!(story.chapter(&story.chapters[1].key).is_some());
 
-    story.delete_chapter(11);
-    story.delete_chapter(13);
+    let first = story.chapters[0].key.clone();
+    let last = story.chapters[1].key.clone();
+    story.delete_chapter(&first);
+    story.delete_chapter(&last);
     assert!(story.chapters.is_empty());
     assert_eq!(story.open_chapter, 0);
 }
@@ -297,12 +307,13 @@ fn deleting_a_chapter_keeps_the_rest_of_the_story() {
 #[test]
 fn a_deleted_story_goes_back_where_it_was() {
     let mut library = Library::sample();
-    let removed = library.delete_story(2).expect("story removed");
+    let key = library.stories[1].key.clone();
+    let removed = library.delete_story(&key).expect("story removed");
     let at = library.insert_story(1, removed);
     assert_eq!(at, 1);
     assert_eq!(library.stories.len(), 2);
     assert_eq!(library.stories[1].title, "The Orchard at Night");
-    assert_eq!(library.stories[1].id, 2);
+    assert_eq!(library.stories[1].key, key);
     // Its chapters and lorebook came back too.
     assert_eq!(library.stories[1].chapters.len(), 1);
     assert!(!library.stories[1].lore.is_empty());
@@ -311,11 +322,13 @@ fn a_deleted_story_goes_back_where_it_was() {
 #[test]
 fn a_deleted_chapter_goes_back_where_it_was() {
     let mut story = Library::sample().stories[0].clone();
-    let before: Vec<u64> = story.chapters.iter().map(|c| c.id).collect();
-    let removed = story.delete_chapter(12).expect("chapter removed");
+    let before: Vec<String> = story.chapters.iter().map(|c| c.key.clone()).collect();
+    let removed = story
+        .delete_chapter(&story.chapters[1].key.clone())
+        .expect("chapter removed");
     let at = story.insert_chapter(1, removed);
     assert_eq!(at, 1);
-    let after: Vec<u64> = story.chapters.iter().map(|c| c.id).collect();
+    let after: Vec<String> = story.chapters.iter().map(|c| c.key.clone()).collect();
     assert_eq!(before, after);
     assert_eq!(story.chapters[1].title, "A House With No Door");
 }
@@ -323,13 +336,14 @@ fn a_deleted_chapter_goes_back_where_it_was() {
 #[test]
 fn a_deleted_lore_entry_goes_back_where_it_was() {
     let mut story = Library::sample().stories[0].clone();
-    let before: Vec<u64> = story.lore.iter().map(|e| e.id).collect();
-    let removed = story.delete_lore(23).expect("lore removed");
+    let before: Vec<String> = story.lore.iter().map(|e| e.key.clone()).collect();
+    let key = story.lore[2].key.clone();
+    let removed = story.delete_lore(&key).expect("lore removed");
     assert_eq!(removed.name, "Brinehouse");
-    assert!(story.lore.iter().all(|e| e.id != 23));
+    assert!(story.lore.iter().all(|e| e.key != key));
     let at = story.insert_lore(2, removed);
     assert_eq!(at, 2);
-    let after: Vec<u64> = story.lore.iter().map(|e| e.id).collect();
+    let after: Vec<String> = story.lore.iter().map(|e| e.key.clone()).collect();
     assert_eq!(before, after);
 }
 
@@ -447,7 +461,7 @@ fn a_long_story_is_condensed_but_keeps_every_chapter() {
     let template = story.chapters[0].clone();
     for round in 0..12 {
         let mut extra = template.clone();
-        extra.id = 900 + round;
+        extra.key = format!("{}-{:03}", story.key, 100 + round);
         extra.summary = format!(
             "Chapter {round} of the voyage: {}",
             "the ship held its course past the reef and the crew said nothing. ".repeat(4)
@@ -477,12 +491,15 @@ fn a_summary_run_covers_the_chapters_the_recap_needs() {
     story.chapters[1].summary.clear();
     // The second chapter is still inside the window, but it travels as
     // itself, so a missing summary there has to be written too.
-    let ids: Vec<u64> = story
+    let ids: Vec<String> = story
         .chapters_needing_summary(2, 1)
         .iter()
-        .map(|c| c.id)
+        .map(|c| c.key.clone())
         .collect();
-    assert_eq!(ids, vec![story.chapters[0].id, story.chapters[1].id]);
+    assert_eq!(
+        ids,
+        vec![story.chapters[0].key.clone(), story.chapters[1].key.clone()]
+    );
 
     // Inside the window a stale summary is still usable; outside it feeds the
     // recap and is refreshed.
@@ -490,19 +507,22 @@ fn a_summary_run_covers_the_chapters_the_recap_needs() {
     second.summary = "A summary from before the last edit.".to_string();
     second.summary_body_hash = 12345;
     story.chapters[1] = second;
-    let ids: Vec<u64> = story
+    let ids: Vec<String> = story
         .chapters_needing_summary(2, 1)
         .iter()
-        .map(|c| c.id)
+        .map(|c| c.key.clone())
         .collect();
-    assert_eq!(ids, vec![story.chapters[0].id]);
+    assert_eq!(ids, vec![story.chapters[0].key.clone()]);
 
-    let ids: Vec<u64> = story
+    let ids: Vec<String> = story
         .chapters_needing_summary(2, 0)
         .iter()
-        .map(|c| c.id)
+        .map(|c| c.key.clone())
         .collect();
-    assert_eq!(ids, vec![story.chapters[0].id, story.chapters[1].id]);
+    assert_eq!(
+        ids,
+        vec![story.chapters[0].key.clone(), story.chapters[1].key.clone()]
+    );
 }
 
 #[test]
@@ -676,7 +696,7 @@ fn trigger_words_keep_quiet_when_they_are_not_written() {
 #[test]
 fn blank_and_one_letter_triggers_are_ignored() {
     let entry = LoreEntry {
-        id: 1,
+        key: String::new(),
         name: "The Bell".to_string(),
         category: "Item".to_string(),
         aliases: String::new(),
@@ -692,7 +712,7 @@ fn blank_and_one_letter_triggers_are_ignored() {
 #[test]
 fn lore_matching_ignores_case_for_umlauts() {
     let entry = LoreEntry {
-        id: 1,
+        key: String::new(),
         name: "Über dem Hafen".to_string(),
         category: "Place".to_string(),
         aliases: "Ältere Boote".to_string(),

@@ -25,16 +25,16 @@ impl FolioApp {
         query: &str,
         replacement: &str,
         match_case: bool,
-        only_chapter: Option<u64>,
+        only_chapter: Option<String>,
     ) {
         if query.is_empty() {
             return;
         }
         let story_id = self.story_id();
         let mut total = 0usize;
-        if let Some(story) = self.library.story(story_id) {
+        if let Some(story) = self.library.story(&story_id) {
             for chapter in &story.chapters {
-                if only_chapter.is_some_and(|id| chapter.id != id) {
+                if only_chapter.as_ref().is_some_and(|id| chapter.key != *id) {
                     continue;
                 }
                 total += find_char_ranges(&chapter.body, query, match_case).len();
@@ -44,17 +44,17 @@ impl FolioApp {
             self.notify("There are no matches left to replace.", false);
             return;
         }
-        let mut saved: Vec<(u64, String)> = Vec::new();
+        let mut saved: Vec<(String, String)> = Vec::new();
         let mut touched = 0usize;
-        if let Some(story) = self.library.story_mut(story_id) {
+        if let Some(story) = self.library.story_mut(&story_id) {
             for chapter in &mut story.chapters {
-                if only_chapter.is_some_and(|id| chapter.id != id) {
+                if only_chapter.as_ref().is_some_and(|id| chapter.key != *id) {
                     continue;
                 }
                 let (new_body, count) =
                     replace_all_in_text(&chapter.body, query, replacement, match_case);
                 if count > 0 {
-                    saved.push((chapter.id, chapter.body.clone()));
+                    saved.push((chapter.key.clone(), chapter.body.clone()));
                     chapter.body = new_body;
                     touched += 1;
                 }
@@ -77,13 +77,13 @@ impl FolioApp {
     }
 
     pub(crate) fn restore_replacement(&mut self, undo: ReplaceUndo) {
-        let Some(story) = self.library.story_mut(undo.story_id) else {
+        let Some(story) = self.library.story_mut(&undo.story_id) else {
             self.notify("That story is no longer open, so the change stayed.", true);
             return;
         };
         let mut restored = 0usize;
         for (chapter_id, body) in undo.chapters {
-            if let Some(chapter) = story.chapter_mut(chapter_id) {
+            if let Some(chapter) = story.chapter_mut(&chapter_id) {
                 chapter.body = body;
                 restored += 1;
             }

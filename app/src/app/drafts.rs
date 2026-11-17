@@ -56,7 +56,14 @@ impl FolioApp {
                 ))
             };
             (
-                story.id, chapter.id, range, passage, demo_text, prompt, base_hash, body_chars,
+                story.key.clone(),
+                chapter.key.clone(),
+                range,
+                passage,
+                demo_text,
+                prompt,
+                base_hash,
+                body_chars,
             )
         };
         let prose = action.is_prose();
@@ -73,8 +80,8 @@ impl FolioApp {
                 if budget != usize::MAX {
                     if let Some(chapter) = self
                         .library
-                        .story_mut(story_id)
-                        .and_then(|story| story.chapter_mut(chapter_id))
+                        .story_mut(&story_id)
+                        .and_then(|story| story.chapter_mut(&chapter_id))
                     {
                         condensed = chapter.compact_conversation(budget);
                     }
@@ -91,16 +98,16 @@ impl FolioApp {
             // the new question lands in it, because the prompt already carries
             // the ask.
             self.library
-                .story(story_id)
-                .and_then(|story| story.chapter(chapter_id))
+                .story(&story_id)
+                .and_then(|story| story.chapter(&chapter_id))
                 .map(|chapter| (chapter.chat.clone(), chapter.chat_summary.clone()))
                 .unwrap_or_default()
         };
         if action == Action::Brainstorm && !ask.trim().is_empty() {
             if let Some(chapter) = self
                 .library
-                .story_mut(story_id)
-                .and_then(|story| story.chapter_mut(chapter_id))
+                .story_mut(&story_id)
+                .and_then(|story| story.chapter_mut(&chapter_id))
             {
                 chapter.chat.push(ChatMessage {
                     role: "user".to_string(),
@@ -120,8 +127,8 @@ impl FolioApp {
             // A new request replaces any draft that was still waiting.
             let replaced = self
                 .library
-                .story_mut(story_id)
-                .and_then(|story| story.chapter_mut(chapter_id))
+                .story_mut(&story_id)
+                .and_then(|story| story.chapter_mut(&chapter_id))
                 .and_then(|chapter| chapter.draft.take())
                 .is_some();
             if replaced {
@@ -141,8 +148,8 @@ impl FolioApp {
                 stopped: false,
             };
             self.draft_live = Some(LiveDraft {
-                story_id,
-                chapter_id,
+                story_id: story_id.clone(),
+                chapter_id: chapter_id.clone(),
                 draft,
             });
             self.draft_error = None;
@@ -154,8 +161,8 @@ impl FolioApp {
                 let (rx, cancel) = start_demo_stream(text);
                 self.job = Some(Job {
                     kind: JobKind::Action(action),
-                    story_id,
-                    chapter_id,
+                    story_id: story_id.clone(),
+                    chapter_id: chapter_id.clone(),
                     stream: StreamFold::default(),
                     rx,
                     cancel,
@@ -165,8 +172,8 @@ impl FolioApp {
             }
             if let Some(chapter) = self
                 .library
-                .story_mut(story_id)
-                .and_then(|story| story.chapter_mut(chapter_id))
+                .story_mut(&story_id)
+                .and_then(|story| story.chapter_mut(&chapter_id))
             {
                 chapter.chat.push(ChatMessage {
                     role: "assistant".to_string(),
@@ -208,7 +215,12 @@ impl FolioApp {
 
     /// Read a marked passage against the lorebook. The reply is parsed into a
     /// proposal; nothing changes until the author saves it in the window.
-    pub(crate) fn start_lore_entry(&mut self, story_id: u64, chapter_id: u64, passage: String) {
+    pub(crate) fn start_lore_entry(
+        &mut self,
+        story_id: String,
+        chapter_id: String,
+        passage: String,
+    ) {
         if self.job.is_some() {
             self.notify("Wait for the current reply to finish first.", false);
             return;
@@ -219,10 +231,10 @@ impl FolioApp {
             return;
         }
         let demo = self.library.settings.is_demo();
-        let Some(story) = self.library.story(story_id) else {
+        let Some(story) = self.library.story(&story_id) else {
             return;
         };
-        if story.chapter(chapter_id).is_none() {
+        if story.chapter(&chapter_id).is_none() {
             return;
         }
         if demo {
@@ -248,7 +260,7 @@ impl FolioApp {
         self.notify("Reading the selection for the lorebook…", false);
     }
 
-    pub(crate) fn open_lore_proposal(&mut self, story_id: u64, suggestion: ai::LoreSuggestion) {
+    pub(crate) fn open_lore_proposal(&mut self, story_id: String, suggestion: ai::LoreSuggestion) {
         if suggestion.text.trim().is_empty() {
             self.notify("The lorebook pass came back with no text to save.", true);
             return;
@@ -278,11 +290,11 @@ impl FolioApp {
 
     /// Put the waiting draft into the chapter. The draft is taken out first, so
     /// a double click can never append the same text twice.
-    pub(crate) fn accept_draft(&mut self, story_id: u64, chapter_id: u64) {
+    pub(crate) fn accept_draft(&mut self, story_id: String, chapter_id: String) {
         let draft = self
             .library
-            .story_mut(story_id)
-            .and_then(|story| story.chapter_mut(chapter_id))
+            .story_mut(&story_id)
+            .and_then(|story| story.chapter_mut(&chapter_id))
             .and_then(|chapter| chapter.draft.take());
         let Some(draft) = draft else {
             return;
@@ -291,9 +303,9 @@ impl FolioApp {
         let outcome = (|| -> Result<(), String> {
             let chapter = self
                 .library
-                .story_mut(story_id)
+                .story_mut(&story_id)
                 .ok_or_else(|| "That story is no longer here.".to_string())?
-                .chapter_mut(chapter_id)
+                .chapter_mut(&chapter_id)
                 .ok_or_else(|| "That chapter is no longer here.".to_string())?;
             accept_into(chapter, &draft)?;
             Ok(())
@@ -314,8 +326,8 @@ impl FolioApp {
                 // Keep the draft so the author can retry or delete it.
                 if let Some(chapter) = self
                     .library
-                    .story_mut(story_id)
-                    .and_then(|story| story.chapter_mut(chapter_id))
+                    .story_mut(&story_id)
+                    .and_then(|story| story.chapter_mut(&chapter_id))
                 {
                     if chapter.draft.is_none() {
                         chapter.draft = Some(draft);
@@ -326,7 +338,7 @@ impl FolioApp {
         }
     }
 
-    pub(crate) fn discard_draft(&mut self, story_id: u64, chapter_id: u64) {
+    pub(crate) fn discard_draft(&mut self, story_id: String, chapter_id: String) {
         let mut had = false;
         if self
             .draft_live
@@ -349,8 +361,8 @@ impl FolioApp {
         }
         if let Some(chapter) = self
             .library
-            .story_mut(story_id)
-            .and_then(|story| story.chapter_mut(chapter_id))
+            .story_mut(&story_id)
+            .and_then(|story| story.chapter_mut(&chapter_id))
         {
             had |= chapter.draft.take().is_some();
         }
@@ -360,11 +372,11 @@ impl FolioApp {
         }
     }
 
-    pub(crate) fn retry_draft(&mut self, story_id: u64, chapter_id: u64) {
+    pub(crate) fn retry_draft(&mut self, story_id: String, chapter_id: String) {
         let action = self
             .library
-            .story(story_id)
-            .and_then(|story| story.chapter(chapter_id))
+            .story(&story_id)
+            .and_then(|story| story.chapter(&chapter_id))
             .and_then(|chapter| chapter.draft.as_ref())
             .map(|draft| draft.action.clone())
             .or_else(|| {
@@ -384,7 +396,7 @@ impl FolioApp {
     }
 
     /// Drop a draft without a notice, used when Retry replaces it at once.
-    pub(crate) fn discard_draft_quiet(&mut self, story_id: u64, chapter_id: u64) {
+    pub(crate) fn discard_draft_quiet(&mut self, story_id: String, chapter_id: String) {
         if self
             .draft_live
             .as_ref()
@@ -395,14 +407,14 @@ impl FolioApp {
         }
         if let Some(chapter) = self
             .library
-            .story_mut(story_id)
-            .and_then(|story| story.chapter_mut(chapter_id))
+            .story_mut(&story_id)
+            .and_then(|story| story.chapter_mut(&chapter_id))
         {
             chapter.draft = None;
         }
     }
 
-    pub(crate) fn stop_draft(&mut self, story_id: u64, chapter_id: u64) {
+    pub(crate) fn stop_draft(&mut self, story_id: String, chapter_id: String) {
         let running = self.job.as_ref().is_some_and(|job| {
             job.story_id == story_id
                 && job.chapter_id == chapter_id
@@ -422,7 +434,7 @@ impl FolioApp {
         self.notify("Stopping the draft — the text so far is kept.", false);
     }
 
-    pub(crate) fn stop_chat(&mut self, story_id: u64, chapter_id: u64) {
+    pub(crate) fn stop_chat(&mut self, story_id: String, chapter_id: String) {
         let running = self.job.as_ref().is_some_and(|job| {
             job.story_id == story_id
                 && job.chapter_id == chapter_id
@@ -451,7 +463,7 @@ impl FolioApp {
         );
     }
 
-    pub(crate) fn stop_proofread(&mut self, story_id: u64, chapter_id: u64) {
+    pub(crate) fn stop_proofread(&mut self, story_id: String, chapter_id: String) {
         let running = self.job.as_ref().is_some_and(|job| {
             job.story_id == story_id
                 && job.chapter_id == chapter_id
@@ -469,7 +481,7 @@ impl FolioApp {
     /// Proofread the chapter one paragraph at a time. The worker sends a
     /// Progress event after each paragraph and the finished body as one delta;
     /// nothing is written until the whole pass is done.
-    pub(crate) fn start_proofread(&mut self, story_id: u64, chapter_id: u64) {
+    pub(crate) fn start_proofread(&mut self, story_id: String, chapter_id: String) {
         if self.job.is_some() {
             self.notify("Wait for the current reply to finish first.", false);
             return;
@@ -480,8 +492,8 @@ impl FolioApp {
         }
         let Some(chapter) = self
             .library
-            .story(story_id)
-            .and_then(|story| story.chapter(chapter_id))
+            .story(&story_id)
+            .and_then(|story| story.chapter(&chapter_id))
         else {
             return;
         };
@@ -562,8 +574,8 @@ impl FolioApp {
     /// ran. The old body goes into the undo notice.
     pub(crate) fn apply_proofread(
         &mut self,
-        story_id: u64,
-        chapter_id: u64,
+        story_id: String,
+        chapter_id: String,
         base_hash: u64,
         text: String,
     ) {
@@ -573,8 +585,8 @@ impl FolioApp {
         }
         let Some(chapter) = self
             .library
-            .story_mut(story_id)
-            .and_then(|story| story.chapter_mut(chapter_id))
+            .story_mut(&story_id)
+            .and_then(|story| story.chapter_mut(&chapter_id))
         else {
             return;
         };

@@ -2,6 +2,21 @@
 
 use super::*;
 
+/// The width a notice may use. A notice that grows with its text can become
+/// wider than the window, and one whose wrapping label has no fixed width can
+/// collapse into a narrow column. This keeps both ends in check.
+pub(crate) fn toast_width(screen_width: f32) -> f32 {
+    let room = (screen_width - 64.0).max(160.0);
+    room.min(620.0).min((screen_width - 32.0).max(120.0))
+}
+
+/// The width of a confirmation dialog's text column. The frame around it adds
+/// its own margins, so this stays a little narrower than the window.
+pub(crate) fn confirm_width(screen_width: f32) -> f32 {
+    let room = (screen_width - 96.0).max(240.0);
+    room.min(460.0).min((screen_width - 48.0).max(200.0))
+}
+
 /// One card in the prompt editor: the function's name, the length it aims for,
 /// and the instruction itself.
 pub(crate) fn prompt_card(ui: &mut Ui, kind: ai::PromptKind, prompts: &mut PromptSettings) -> bool {
@@ -13,6 +28,7 @@ pub(crate) fn prompt_card(ui: &mut Ui, kind: ai::PromptKind, prompts: &mut Promp
         .inner_margin(Margin::symmetric(12, 10))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
+            let per_block = kind == ai::PromptKind::Summary;
             ui.horizontal(|ui| {
                 ui.label(
                     RichText::new(kind.label())
@@ -46,18 +62,34 @@ pub(crate) fn prompt_card(ui: &mut Ui, kind: ai::PromptKind, prompts: &mut Promp
                                     }
                                 }),
                         )
-                        .on_hover_text(
-                            "How many words the answer should aim for. No limit means Folio asks for no particular length and lets the reply use the room the endpoint gives it.",
-                        )
+                        .on_hover_text(if per_block {
+                            "How many words each block summary should aim for. The final merged summary has no separate target; it keeps all facts from the blocks."
+                        } else {
+                            "How many words the answer should aim for. No limit means Folio asks for no particular length and lets the reply use the room the endpoint gives it."
+                        })
                         .changed()
                     {
                         kind.slot_mut(prompts).words = Some(words);
                         changed = true;
                     }
-                    ui.label(RichText::new("aim for").size(9.5).color(C::muted()));
+                    ui.label(
+                        RichText::new(if per_block { "per block" } else { "aim for" })
+                            .size(9.5)
+                            .color(C::muted()),
+                    );
                 });
             });
             ui.add_space(3.0);
+            if per_block {
+                ui.label(
+                    RichText::new(
+                        "The chapter is summarized in blocks; this target applies to each block, not to the merged text.",
+                    )
+                    .size(9.0)
+                    .color(C::muted()),
+                );
+                ui.add_space(2.0);
+            }
             let default = kind.default_instruction();
             let mut shown = kind.base_text(prompts);
             let rows = if kind == ai::PromptKind::Summary { 4 } else { 3 };

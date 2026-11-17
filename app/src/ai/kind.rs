@@ -76,7 +76,7 @@ impl PromptKind {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Summary => "Chapter summary",
+            Self::Summary => "Chapter summary (each block)",
             Self::Continue => "Continue the scene",
             Self::Rewrite => "Rewrite a passage",
             Self::Elaborate => "Elaborate a passage",
@@ -88,7 +88,7 @@ impl PromptKind {
     /// instruction of their own.
     pub fn default_instruction(self) -> &'static str {
         match self {
-            Self::Summary => "Summarize the NEW CHAPTER below into one past-tense, third-person account of what happened. This summary replaces the chapter itself: once written, the raw chapter text is dropped from the story's context and this text is all that remains of it. Write it so a reader who never saw the chapter could carry the story forward from it.\n\nCarry through, in your own prose, whatever the chapter established of:\n- What happened, in order, and what it cost or changed.\n- Who did it, by name. Never \"he\", \"she\", \"the stranger\" or \"the user\".\n- What is now true that was not before: an injury, a location, a possession, a rank, a bond formed or broken.\n- What was left unresolved: a deadline, a threat, a promise, a question asked and not answered, a plan agreed to.\n- Who learned or concealed what, when that asymmetry drives the story.\n- How the people reacted to each other, when it changes what they do next — not as decoration.\n\nReproduce names, numbers, dates, distances, sums and place names exactly as the chapter gave them. Keep it factual: no atmosphere, no mood painting, no praise and no interpretation. Do not leave out the opening of the chapter.",
+            Self::Summary => "Summarize the passage below in one factual, past-tense, third-person paragraph. Keep every name, number, date, fact and open question exactly as the passage gives it. Do not add anything, do not resolve anything it leaves open, and do not interpret or comment on it. Write only the summary, with no preamble and no headings.",
             Self::Continue => "Continue the current chapter from where it stops. Match the existing voice, keep every established fact, and end on a small turn or question rather than a conclusion. Do not summarize what came before and do not use a heading. Return only the prose.",
             Self::Rewrite => "Rewrite the passage below so it is sharper and more concrete, keeping the same events, facts and point of view. Return only the rewritten passage, with no preamble and no commentary.",
             Self::Elaborate => "Elaborate the passage below into a fuller scene. Keep every event, fact and point of view exactly as it is; add concrete sensory detail, small actions and the beat of the moment. Do not invent a new plot turn and do not summarize. Aim for roughly twice the length of the passage, and return only the prose.",
