@@ -56,42 +56,42 @@ features are in place, and changes are saved automatically.
 
 ## Features
 
-- **Story library** with chapters, word counts and a story bible (premise,
-  lorebook) – settings in `config.json` and one file per book under `stories\`.
-- **Stable keys:** every book has a four-character key such as `A43K`; chapters
-  are `A43K-001`, `A43K-002`, … and lore entries `A43K-L001`, …. The keys are
-  internal and never appear in the interface.
-- **Continue scene**: the answer grows as a coloured draft below the chapter.
-  Only **Accept** writes it in; next to it are **Delete**, **Retry**, and
-  **Stop** while it is still streaming.
-- **Steering bar**: a field for the direction of the next continuation. Leave
-  it empty and the model decides.
-- **Rewrite and Elaborate**: select text, right-click – only the selected
-  passage is replaced, with a check that it has not moved in the meantime.
-- **Brainstorm chat** per chapter, separate from the chapter text. Long
-  conversations are condensed so the context window lasts. The assistant can
-  propose a summary, lore facts from the chapter, or an explicitly requested
-  invention; nothing changes without Accept.
-- **Lorebook** with categories, aliases, trigger words and pinning. On request
-  the AI suggests new entries from a passage, and an explicitly invented entry
-  is marked **invented**.
-- **Summaries** in the right side panel and as long-term memory. A chapter is
-  summarised in blocks of about 1,200 words, each block on its own, and the
-  blocks are merged into one text afterwards. Older chapters without a usable
-  summary are caught up on request; a running pass can be stopped and saves the
+- **Drafts you control.** Continue writes into a coloured draft below the
+  chapter; only **Accept** changes the manuscript. **Delete**, **Retry** and
+  **Stop** sit right beside it.
+- **Steering bar.** Tell the partner where the next passage should go — a
+  storm, a confession, a quieter scene. Leave it empty and the model decides.
+- **Rewrite and Elaborate.** Select a passage, right-click, and only that
+  passage is replaced. Folio refuses the draft if the text moved meanwhile.
+- **An assistant that reads this chapter.** A separate chat per chapter can
+  discuss the page, propose a new summary, extract lore facts, or invent a new
+  character, place or item on request. Every action waits for
+  Accept/Deny/Retry; invented entries are marked **invented** in the lorebook.
+- **A lorebook that keeps the story straight.** Categories, aliases, trigger
+  words and pinning. Mentioned or pinned entries travel with every request, so
+  the AI stops contradicting the book.
+- **Chapter summaries.** Every chapter gets its own summary. A long chapter is
+  split into blocks of about 1,200 words, each block is summarised on its own,
+  and the blocks are merged into one text afterwards. Separate word targets
+  apply to the block and to the merged summary. Stopping a run keeps the
   finished blocks as a partial summary.
-- **Find and replace** in the open chapter or the whole book, with undo.
-- **Spelling and grammar** checked paragraph by paragraph. Only exact
-  corrections are applied; a model that returns advice or a rewrite leaves the
-  paragraph unchanged.
-- **Export** as one PDF for the whole story or one text file per chapter.
-- **Endpoint lamp** shows whether the endpoint is reachable, which model
-  answers, and how large its context window is.
-- **Three looks** – White, Paper and Corpo – plus system fonts and a
-  selectable text size for the desk.
-- **Readable everywhere:** long messages, warnings and confirmation dialogs
-  wrap instead of running out of the window; the Settings view scrolls and
-  keeps its footer in place.
+- **The whole story stays in context.** Those summaries are the AI's memory:
+  the most recent ones are sent in full, while everything older is condensed
+  into one “story so far” recap. Every request carries the recap, the recent
+  summaries and the open chapter. Under **Settings → “Chapter summaries in the
+  AI context” → “recent summaries sent in full”** you choose how many of the
+  latest chapter summaries are sent in full before the rest is condensed.
+- **Proofreading that respects the page.** Spelling and grammar are checked
+  paragraph by paragraph; only exact corrections are applied. A model that
+  returns advice or a rewrite leaves the paragraph untouched.
+- **Export.** One PDF for the whole book, with a contents page and bookmarks,
+  or one plain-text file per chapter.
+- **Any OpenAI-compatible endpoint.** Local or remote. The lamp in the top bar
+  shows whether it answers, which model it serves and its context window. With
+  no endpoint, a demo writer keeps the app usable.
+- **A layout that fits the work.** One right side panel with eight views,
+  prompt blocks you can drag into your own order, and three looks: White,
+  Paper and Corpo.
 
 ## Download
 
@@ -213,9 +213,9 @@ place.
 | --- | --- |
 | ![Draft](app/shots/draft-paper.png) | ![Summary](app/shots/summary-paper.png) |
 
-| Find and replace | Lore proposal |
+| Prompt layout | Lore proposal |
 | --- | --- |
-| ![Find](app/shots/find-replace-paper.png) | ![Lore](app/shots/lore-proposal-paper.png) |
+| ![Prompt layout](app/shots/prompt-layout-paper.png) | ![Lore](app/shots/lore-proposal-paper.png) |
 
 | Assistant: lore facts | Assistant: invented character |
 | --- | --- |
