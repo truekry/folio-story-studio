@@ -114,6 +114,30 @@ impl FolioApp {
                                     return;
                                 }
                                 let words = live.draft.text.split_whitespace().count();
+                                // The model may hand back the read-only context
+                                // around the passage. That is worth a note, not
+                                // a retry: the author decides.
+                                if let Some((start, end)) = live.draft.range {
+                                    let repeats = self
+                                        .library
+                                        .story(&job.story_id)
+                                        .and_then(|story| story.chapter(&job.chapter_id))
+                                        .is_some_and(|chapter| {
+                                            let (before, after) =
+                                                neighbour_paragraphs(&chapter.body, &(start..end));
+                                            draft_repeats_neighbour(
+                                                &live.draft.text,
+                                                before.as_deref(),
+                                                after.as_deref(),
+                                            )
+                                        });
+                                    if repeats {
+                                        self.notify(
+                                            "The draft repeats the neighbouring paragraph. Check it before accepting.",
+                                            false,
+                                        );
+                                    }
+                                }
                                 if let Some(chapter) = self
                                     .library
                                     .story_mut(&job.story_id)

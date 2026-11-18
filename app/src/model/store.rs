@@ -100,8 +100,11 @@ impl Store {
                 Ok(text) => {
                     let hash = content_hash(&text);
                     match serde_json::from_str::<Config>(&text) {
-                        Ok(config) => {
+                        Ok(mut config) => {
                             last_config = Some(hash);
+                            if let Some(warning) = secrets::unlock(dir, &mut config.settings) {
+                                report.warnings.push(warning);
+                            }
                             Some(config)
                         }
                         Err(error) => {
@@ -190,15 +193,38 @@ impl Store {
                 .push("config.json exists, but no books were found in stories\\.".to_string());
         }
 
-        let library = match config {
+        let mut library = match config {
             Some(config) => config.into_library(stories),
             None => Config::default().into_library(stories),
         };
-        let store = Store {
+        let mut store = Store {
             dir: dir.to_path_buf(),
             last_config,
             last_stories: cache,
         };
+        // A key from an older version is sealed right now, so the plain text
+        // does not survive this start, even if the author changes nothing.
+        if !library.settings.api_key.trim().is_empty()
+            && library.settings.api_key_sealed.trim().is_empty()
+        {
+            match secrets::seal(store.dir(), &library.settings.api_key) {
+                Ok(sealed) => {
+                    library.settings.api_key_sealed = sealed;
+                    if let Err(errors) = store.save(&library) {
+                        report.warnings.extend(errors);
+                    }
+                }
+                Err(error) => report
+                    .warnings
+                    .push(format!("The API key could not be sealed: {error}.")),
+            }
+        }
+        if secrets::machine_id().is_none() {
+            report.warnings.push(
+                "No machine id was available, so the API key is bound to this data folder only."
+                    .to_string(),
+            );
+        }
         (library, store, report)
     }
 
@@ -276,7 +302,10 @@ impl Store {
             }
         }
 
-        let config = Config::from_library(library);
+        let mut config = Config::from_library(library);
+        if let Some(warning) = secrets::lock(&self.dir, &mut config.settings) {
+            errors.push(warning);
+        }
         match serde_json::to_string_pretty(&config) {
             Ok(text) => {
                 let hash = content_hash(&text);
@@ -410,7 +439,12 @@ fn write_migration(dir: &Path, library: &Library) -> Result<(u64, HashMap<String
             .map_err(|error| format!("Could not write “{}”: {error}", story.title))?;
         hashes.insert(story.key.clone(), content_hash(&text));
     }
-    let config = Config::from_library(library);
+    let mut config = Config::from_library(library);
+    if !config.settings.api_key.trim().is_empty() {
+        let sealed = secrets::seal(dir, &config.settings.api_key)
+            .map_err(|error| format!("The API key could not be sealed: {error}"))?;
+        config.settings.api_key_sealed = sealed;
+    }
     let text = serde_json::to_string_pretty(&config)
         .map_err(|error| format!("Could not prepare config.json: {error}"))?;
     // Config is the completion marker, so it is written last.

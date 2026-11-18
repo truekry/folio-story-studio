@@ -302,7 +302,7 @@ fn elaborating_uses_its_own_text_and_keeps_the_passage() {
         "The door gave way.",
         &settings,
     );
-    assert!(prompt.contains("Expand the passage in CONTEXT"), "{prompt}");
+    assert!(prompt.contains("Expand the text under PASSAGE"), "{prompt}");
     assert!(prompt.contains("PASSAGE:\nThe door gave way."), "{prompt}");
 
     settings.prompts.elaborate.text = "Slow the moment down.".to_string();
@@ -481,7 +481,7 @@ fn an_ongoing_chapter_is_not_mistaken_for_a_new_one() {
 /// a block onto itself changes nothing.
 #[test]
 fn moving_a_block_by_drag_reorders_the_layout() {
-    let mut order = PromptBlock::DEFAULT_ORDER.to_vec();
+    let mut order = PromptBlock::PROSE_ORDER.to_vec();
     assert!(move_block(
         &mut order,
         PromptBlock::StorySoFar,
@@ -509,14 +509,14 @@ fn moving_a_block_by_drag_reorders_the_layout() {
         PromptBlock::Task,
         PromptBlock::Task
     ));
-    assert_eq!(order.len(), PromptBlock::DEFAULT_ORDER.len());
+    assert_eq!(order.len(), PromptBlock::PROSE_ORDER.len());
 }
 
 /// The layout repairs a hand-edited list instead of losing blocks.
 #[test]
 fn the_prompt_layout_keeps_every_block_and_drops_junk() {
-    let standard = normalized_order(&[]);
-    assert_eq!(standard.as_slice(), PromptBlock::DEFAULT_ORDER.as_slice());
+    let standard = normalized_order(&[], &PromptBlock::PROSE_ORDER);
+    assert_eq!(standard.as_slice(), PromptBlock::PROSE_ORDER.as_slice());
 
     let saved = vec![
         "current_chapter".to_string(),
@@ -525,10 +525,10 @@ fn the_prompt_layout_keeps_every_block_and_drops_junk() {
         "assistant_rules".to_string(),
         "bogus".to_string(),
     ];
-    let order = normalized_order(&saved);
+    let order = normalized_order(&saved, &PromptBlock::PROSE_ORDER);
     assert_eq!(order[0], PromptBlock::CurrentChapter);
     assert_eq!(order[1], PromptBlock::Story);
-    assert_eq!(order.len(), PromptBlock::DEFAULT_ORDER.len());
+    assert_eq!(order.len(), PromptBlock::PROSE_ORDER.len());
     assert!(order.contains(&PromptBlock::Task));
 }
 
@@ -592,4 +592,313 @@ fn the_assistant_prompt_names_its_actions_and_never_carries_the_key() {
     // Prose writing is not the assistant and must not see the action rules.
     let prose = chat_prompt(story, chapter, Action::Continue, "", "", &settings);
     assert!(!prose.contains("[[FOLIO:LORE]]"));
+}
+
+#[test]
+fn a_disabled_block_is_left_out_of_the_request() {
+    let library = Library::sample();
+    let story = &library.stories[0];
+    let chapter = &story.chapters[0];
+    let mut settings = AiSettings::default();
+    let whole = chat_prompt(story, chapter, Action::Continue, "", "", &settings);
+    assert!(whole.contains("STORY:"), "{whole}");
+
+    settings.prompts.disabled = vec!["story".to_string()];
+    let thinned = chat_prompt(story, chapter, Action::Continue, "", "", &settings);
+    assert!(
+        !thinned.contains("STORY:"),
+        "a block switched off must not travel: {thinned}"
+    );
+    // The rest of the request is untouched.
+    assert!(thinned.contains("TASK:"), "{thinned}");
+    assert!(thinned.contains("CURRENT CHAPTER"), "{thinned}");
+}
+
+#[test]
+fn the_task_block_cannot_be_switched_off() {
+    let library = Library::sample();
+    let story = &library.stories[0];
+    let chapter = &story.chapters[0];
+    let settings = AiSettings {
+        prompts: crate::model::PromptSettings {
+            disabled: vec![
+                "task".to_string(),
+                "Task".to_string(),
+                "story".to_string(),
+                "story".to_string(),
+            ],
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let prompt = chat_prompt(story, chapter, Action::Continue, "", "", &settings);
+    assert!(
+        prompt.contains("TASK:"),
+        "a request without its task has nothing to do: {prompt}"
+    );
+    assert!(!prompt.contains("STORY:"), "{prompt}");
+    // Unknown names, duplicates and the task block are repaired away.
+    assert_eq!(
+        normalized_disabled(&settings.prompts.disabled, &PromptBlock::PROSE_ORDER),
+        vec![PromptBlock::Story]
+    );
+}
+
+#[test]
+fn a_block_toggles_off_and_on_again() {
+    let mut saved = Vec::new();
+    assert!(toggle_disabled(
+        &mut saved,
+        PromptBlock::Lorebook,
+        &PromptBlock::PROSE_ORDER
+    ));
+    assert_eq!(saved, vec!["lorebook".to_string()]);
+    assert!(toggle_disabled(
+        &mut saved,
+        PromptBlock::Lorebook,
+        &PromptBlock::PROSE_ORDER
+    ));
+    assert!(
+        saved.is_empty(),
+        "the second double-click switches it back on"
+    );
+    assert!(!toggle_disabled(
+        &mut saved,
+        PromptBlock::Task,
+        &PromptBlock::PROSE_ORDER
+    ));
+    assert!(saved.is_empty(), "the task block stays on");
+}
+
+#[test]
+fn reset_brings_every_block_back() {
+    let mut order = vec!["lorebook".to_string(), "task".to_string()];
+    let mut disabled = vec!["lorebook".to_string(), "steering".to_string()];
+    reset_layout(&mut order, &mut disabled);
+    assert!(order.is_empty(), "the standard order returns");
+    assert!(disabled.is_empty(), "every block is switched on again");
+}
+
+#[test]
+fn the_disabled_list_survives_a_saved_settings_file() {
+    let settings = crate::model::PromptSettings {
+        disabled: vec!["lorebook".to_string(), "steering".to_string()],
+        ..Default::default()
+    };
+    let text = serde_json::to_string(&settings).expect("serialize the settings");
+    let back: crate::model::PromptSettings =
+        serde_json::from_str(&text).expect("read the settings back");
+    assert_eq!(back.disabled, settings.disabled);
+
+    // A file from before this field means: every block is on.
+    let old: crate::model::PromptSettings = serde_json::from_str("{}").expect("old settings");
+    assert!(old.disabled.is_empty());
+}
+
+#[test]
+fn a_rewrite_gets_only_the_passage_and_its_neighbours() {
+    let library = Library::sample();
+    let story = &library.stories[0];
+    let chapter = &story.chapters[1];
+    let settings = AiSettings::default();
+    let prompt = chat_prompt_with_neighbours(
+        story,
+        chapter,
+        Action::Rewrite,
+        "",
+        "The door gave way.",
+        Some("Before this line."),
+        Some("After this line."),
+        &settings,
+    );
+    assert!(
+        prompt.contains("BEFORE (read-only context, do not return it):\nBefore this line."),
+        "{prompt}"
+    );
+    assert!(prompt.contains("PASSAGE:\nThe door gave way."), "{prompt}");
+    assert!(
+        prompt.contains("AFTER (read-only context, do not return it):\nAfter this line."),
+        "{prompt}"
+    );
+    assert!(
+        prompt.contains("Rewrite only the text under PASSAGE"),
+        "{prompt}"
+    );
+    // Nothing a rewrite must not see: no steering, no lore, no premise, no
+    // chapter position, no summaries.
+    for absent in [
+        "STEERING",
+        "LOREBOOK",
+        "PREMISE",
+        "STORY SO FAR",
+        "RECENT CHAPTER SUMMARIES",
+        "CURRENT CHAPTER",
+        "CHAPTER POSITION",
+        "CONTEXT",
+    ] {
+        assert!(
+            !prompt.contains(absent),
+            "{absent} reached the rewrite: {prompt}"
+        );
+    }
+}
+
+#[test]
+fn an_elaborate_brings_premise_lore_and_the_chapter_summary() {
+    let library = Library::sample();
+    let story = &library.stories[0];
+    let chapter = &story.chapters[1];
+    let settings = AiSettings::default();
+    let prompt = chat_prompt_with_neighbours(
+        story,
+        chapter,
+        Action::Elaborate,
+        "",
+        "The door gave way.",
+        None,
+        None,
+        &settings,
+    );
+    assert!(prompt.contains("PREMISE:"), "{prompt}");
+    assert!(prompt.contains("LOREBOOK"), "{prompt}");
+    assert!(prompt.contains("CHAPTER SUMMARY"), "{prompt}");
+    assert!(
+        prompt.contains("Expand only the text under PASSAGE"),
+        "{prompt}"
+    );
+    // Even here the writing layout and the steering note stay out.
+    assert!(!prompt.contains("STEERING"), "{prompt}");
+    assert!(!prompt.contains("STORY SO FAR"), "{prompt}");
+    assert!(!prompt.contains("CURRENT CHAPTER"), "{prompt}");
+}
+
+#[test]
+fn a_missing_neighbour_leaves_its_block_out() {
+    let library = Library::sample();
+    let story = &library.stories[0];
+    let chapter = &story.chapters[1];
+    let settings = AiSettings::default();
+    let prompt = chat_prompt_with_neighbours(
+        story,
+        chapter,
+        Action::Rewrite,
+        "",
+        "The door gave way.",
+        None,
+        Some("After this line."),
+        &settings,
+    );
+    assert!(!prompt.contains("BEFORE (read-only context"), "{prompt}");
+    assert!(prompt.contains("AFTER (read-only context"), "{prompt}");
+}
+
+#[test]
+fn the_two_layouts_do_not_touch_each_other() {
+    let library = Library::sample();
+    let story = &library.stories[0];
+    let chapter = &story.chapters[1];
+    let mut settings = AiSettings::default();
+
+    // Off for writing, still on for the assistant.
+    settings.prompts.disabled = vec!["lorebook".to_string()];
+    let prose = chat_prompt(story, chapter, Action::Continue, "", "", &settings);
+    assert!(!prose.contains("LOREBOOK"), "{prose}");
+    let chat = chat_prompt(
+        story,
+        chapter,
+        Action::Brainstorm,
+        "Who is Mira?",
+        "",
+        &settings,
+    );
+    assert!(
+        chat.contains("LOREBOOK"),
+        "the chat keeps its layout: {chat}"
+    );
+
+    // Off for the assistant, still on for writing.
+    settings.prompts.disabled.clear();
+    settings.prompts.chat_disabled = vec!["current_chapter".to_string()];
+    let chat = chat_prompt(
+        story,
+        chapter,
+        Action::Brainstorm,
+        "Who is Mira?",
+        "",
+        &settings,
+    );
+    assert!(!chat.contains("CURRENT CHAPTER"), "{chat}");
+    let prose = chat_prompt(story, chapter, Action::Continue, "", "", &settings);
+    assert!(prose.contains("CURRENT CHAPTER"), "{prose}");
+}
+
+#[test]
+fn each_layout_drops_blocks_it_does_not_use() {
+    assert_eq!(PromptBlock::PROSE_ORDER.len(), 10);
+    assert_eq!(PromptBlock::CHAT_ORDER.len(), 7);
+    assert!(!PromptBlock::CHAT_ORDER.contains(&PromptBlock::Steering));
+    assert!(!PromptBlock::CHAT_ORDER.contains(&PromptBlock::Reminder));
+    assert!(!PromptBlock::CHAT_ORDER.contains(&PromptBlock::ChapterPosition));
+
+    let saved = vec![
+        "steering".to_string(),
+        "lorebook".to_string(),
+        "passage".to_string(),
+    ];
+    let chat = normalized_order(&saved, &PromptBlock::CHAT_ORDER);
+    assert_eq!(chat[0], PromptBlock::Lorebook);
+    assert!(!chat.contains(&PromptBlock::Steering));
+    assert_eq!(chat.len(), PromptBlock::CHAT_ORDER.len());
+
+    let disabled = vec![
+        "steering".to_string(),
+        "task".to_string(),
+        "lorebook".to_string(),
+        "passage".to_string(),
+    ];
+    assert_eq!(
+        normalized_disabled(&disabled, &PromptBlock::CHAT_ORDER),
+        vec![PromptBlock::Lorebook]
+    );
+    assert_eq!(
+        normalized_disabled(&disabled, &PromptBlock::PROSE_ORDER),
+        vec![PromptBlock::Steering, PromptBlock::Lorebook]
+    );
+}
+
+#[test]
+fn an_old_writing_order_with_the_passage_block_still_loads() {
+    let saved = vec!["lorebook".to_string(), "passage".to_string()];
+    let order = normalized_order(&saved, &PromptBlock::PROSE_ORDER);
+    assert_eq!(order[0], PromptBlock::Lorebook);
+    assert_eq!(order.len(), PromptBlock::PROSE_ORDER.len());
+}
+
+#[test]
+fn the_assistant_is_not_told_where_the_chapter_stands() {
+    let library = Library::sample();
+    let story = &library.stories[0];
+    let chapter = &story.chapters[1];
+    let settings = AiSettings::default();
+    let chat = chat_prompt(
+        story,
+        chapter,
+        Action::Brainstorm,
+        "What could happen next?",
+        "",
+        &settings,
+    );
+    assert!(
+        !chat.contains("CHAPTER POSITION"),
+        "the assistant does not write into the chapter: {chat}"
+    );
+    // The writing prompt still knows its place in the book.
+    let prose = chat_prompt(story, chapter, Action::Continue, "", "", &settings);
+    assert!(prose.contains("CHAPTER POSITION"), "{prose}");
+}
+
+#[test]
+fn the_premise_block_is_called_the_story_bible() {
+    assert_eq!(PromptBlock::Premise.label(), "Story bible");
+    assert_eq!(PromptBlock::Premise.card_label(), "Story bible");
 }

@@ -1,5 +1,6 @@
 //! Tests for config.json, one file per book, and the old-library migration.
 
+use super::secrets::*;
 use super::*;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -317,4 +318,125 @@ fn an_atomic_save_leaves_no_temporary_file() {
         .filter(|name| name.ends_with(".tmp"))
         .collect();
     assert!(leftovers.is_empty(), "temporary files left: {leftovers:?}");
+}
+
+#[test]
+fn the_key_is_sealed_and_everything_else_stays_readable() {
+    let dir = temp_dir("sealed-key");
+    let (mut library, mut store, _) = Store::open(&dir);
+    library.settings.base_url = "http://localhost:1234/v1".to_string();
+    library.settings.model = "local-model".to_string();
+    library.settings.api_key = "sk-live-key".to_string();
+    store.save(&library).expect("save");
+
+    let text = fs::read_to_string(dir.join("config.json")).expect("config.json");
+    assert!(
+        !text.contains("sk-live-key"),
+        "the plain key must not reach the file: {text}"
+    );
+    assert!(text.contains("api_key_sealed"), "{text}");
+    assert!(text.contains("v1:"), "{text}");
+    // Everything else the author may want to read or edit stays plain.
+    assert!(
+        text.contains("\"base_url\": \"http://localhost:1234/v1\""),
+        "{text}"
+    );
+    assert!(text.contains("\"model\": \"local-model\""), "{text}");
+    assert!(text.contains("\"look\""), "{text}");
+
+    let (again, _, report) = Store::open(&dir);
+    assert_eq!(
+        again.settings.api_key, "sk-live-key",
+        "the next start reads the key back"
+    );
+    assert!(
+        !report.warnings.iter().any(|warning| warning == UNREADABLE),
+        "{:?}",
+        report.warnings
+    );
+}
+
+#[test]
+fn a_plain_key_in_an_old_config_is_sealed_at_once() {
+    let dir = temp_dir("plain-key");
+    let config = serde_json::json!({
+        "version": 1,
+        "settings": {
+            "base_url": "https://api.openai.com/v1",
+            "api_key": "sk-old-plain",
+            "model": "gpt-4o-mini"
+        },
+        "look": "paper"
+    });
+    fs::write(
+        dir.join("config.json"),
+        serde_json::to_string_pretty(&config).expect("config text"),
+    )
+    .expect("write an old config");
+
+    let (library, _, report) = Store::open(&dir);
+    assert_eq!(
+        library.settings.api_key, "sk-old-plain",
+        "the key still works in this session"
+    );
+    let text = fs::read_to_string(dir.join("config.json")).expect("config.json");
+    assert!(
+        !text.contains("sk-old-plain"),
+        "the plain key must be gone after the first start: {text}"
+    );
+    assert!(text.contains("api_key_sealed"), "{text}");
+    assert!(
+        report
+            .warnings
+            .iter()
+            .all(|warning| !warning.contains("sk-old-plain")),
+        "a warning must never quote the key: {:?}",
+        report.warnings
+    );
+}
+
+#[test]
+fn a_seal_this_machine_cannot_read_starts_empty_with_a_notice() {
+    let source = temp_dir("foreign-seal-source");
+    let target = temp_dir("foreign-seal-target");
+    // Sealed for another machine, and the target folder has no pepper either.
+    let sealed = seal_with(
+        &source,
+        "sk-elsewhere",
+        &Material {
+            machine: "another-machine".to_string(),
+            user: "someone".to_string(),
+        },
+    )
+    .expect("seal");
+    let config = serde_json::json!({
+        "version": 1,
+        "settings": {
+            "base_url": "https://api.openai.com/v1",
+            "api_key_sealed": sealed
+        }
+    });
+    fs::write(
+        target.join("config.json"),
+        serde_json::to_string_pretty(&config).expect("config text"),
+    )
+    .expect("write the config");
+
+    let (library, mut store, report) = Store::open(&target);
+    assert!(
+        library.settings.api_key.is_empty(),
+        "an unreadable key must not be guessed"
+    );
+    assert!(
+        report.warnings.iter().any(|warning| warning == UNREADABLE),
+        "{:?}",
+        report.warnings
+    );
+
+    // Saving must not destroy a seal this machine simply cannot open.
+    store.save(&library).expect("save");
+    let text = fs::read_to_string(target.join("config.json")).expect("config.json");
+    assert!(text.contains("api_key_sealed"), "{text}");
+    assert!(text.contains("v1:"), "{text}");
+    assert!(!text.contains("sk-elsewhere"), "{text}");
 }

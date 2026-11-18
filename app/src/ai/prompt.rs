@@ -264,8 +264,9 @@ pub fn story_context(
     out
 }
 
-/// One brick of the prompt. The author can reorder these in the prompt editor;
-/// blocks that do not apply to a request are skipped.
+/// One brick of a prompt. The author can reorder these in two separate
+/// layouts: the writing layout shapes Continue, the chat layout shapes the
+/// assistant. Rewrite and Elaborate do not use a layout at all.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PromptBlock {
     Task,
@@ -276,13 +277,13 @@ pub enum PromptBlock {
     ChapterPosition,
     CurrentChapter,
     Lorebook,
-    Passage,
     Steering,
     Reminder,
 }
 
 impl PromptBlock {
-    pub const DEFAULT_ORDER: [PromptBlock; 11] = [
+    /// The blocks a continuation may use, in their standard order.
+    pub const PROSE_ORDER: [PromptBlock; 10] = [
         PromptBlock::Task,
         PromptBlock::Story,
         PromptBlock::Premise,
@@ -291,9 +292,22 @@ impl PromptBlock {
         PromptBlock::ChapterPosition,
         PromptBlock::CurrentChapter,
         PromptBlock::Lorebook,
-        PromptBlock::Passage,
         PromptBlock::Steering,
         PromptBlock::Reminder,
+    ];
+
+    /// The blocks the assistant's context may use. Steering and Reminder are
+    /// missing on purpose: they ask for prose, not for an answer. Chapter
+    /// position is missing too: the assistant does not write into the chapter,
+    /// so where it stands in the book does not concern it.
+    pub const CHAT_ORDER: [PromptBlock; 7] = [
+        PromptBlock::Task,
+        PromptBlock::Story,
+        PromptBlock::Premise,
+        PromptBlock::StorySoFar,
+        PromptBlock::RecentChapters,
+        PromptBlock::CurrentChapter,
+        PromptBlock::Lorebook,
     ];
 
     pub fn name(self) -> &'static str {
@@ -306,7 +320,6 @@ impl PromptBlock {
             PromptBlock::ChapterPosition => "chapter_position",
             PromptBlock::CurrentChapter => "current_chapter",
             PromptBlock::Lorebook => "lorebook",
-            PromptBlock::Passage => "passage",
             PromptBlock::Steering => "steering",
             PromptBlock::Reminder => "reminder",
         }
@@ -322,7 +335,6 @@ impl PromptBlock {
             "chapter_position" => PromptBlock::ChapterPosition,
             "current_chapter" => PromptBlock::CurrentChapter,
             "lorebook" => PromptBlock::Lorebook,
-            "passage" => PromptBlock::Passage,
             "steering" => PromptBlock::Steering,
             "reminder" => PromptBlock::Reminder,
             _ => return None,
@@ -333,15 +345,23 @@ impl PromptBlock {
         match self {
             PromptBlock::Task => "Task & length",
             PromptBlock::Story => "Story",
-            PromptBlock::Premise => "Premise",
+            PromptBlock::Premise => "Story bible",
             PromptBlock::StorySoFar => "Story so far",
             PromptBlock::RecentChapters => "Recent chapters",
             PromptBlock::ChapterPosition => "Chapter position",
             PromptBlock::CurrentChapter => "Current chapter",
             PromptBlock::Lorebook => "Lorebook",
-            PromptBlock::Passage => "Passage",
             PromptBlock::Steering => "Steering",
             PromptBlock::Reminder => "Reminder",
+        }
+    }
+
+    /// The name a layout card shows. The task card keeps it short so the
+    /// "always on" chip fits beside it in a narrow side panel.
+    pub fn card_label(self) -> &'static str {
+        match self {
+            PromptBlock::Task => "Task",
+            other => other.label(),
         }
     }
 
@@ -352,7 +372,9 @@ impl PromptBlock {
                 "The instruction and the word target. It tells the model what to do; the Reminder repeats the core command at the end."
             }
             PromptBlock::Story => "The book's title.",
-            PromptBlock::Premise => "The story premise, when one is set.",
+            PromptBlock::Premise => {
+                "The premise from your story bible, when one is set. Lore entries have their own block."
+            }
             PromptBlock::StorySoFar => {
                 "One condensed block of all chapter summaries older than the recent window."
             }
@@ -367,9 +389,6 @@ impl PromptBlock {
             }
             PromptBlock::Lorebook => {
                 "Up to ten pinned or mentioned entries with category, aliases and a shortened description."
-            }
-            PromptBlock::Passage => {
-                "The selected passage for Rewrite and Elaborate. Skipped for other actions."
             }
             PromptBlock::Steering => {
                 "Your steering note. Added only when the field is not empty and the action writes prose."
@@ -398,24 +417,65 @@ pub fn move_block(order: &mut Vec<PromptBlock>, dragged: PromptBlock, target: Pr
     true
 }
 
-/// The saved order, repaired for hand-edited files: unknown names are dropped,
-/// duplicates removed, and any block missing from an older file is appended in
-/// its standard place. Reordering can never lose a block.
-pub fn normalized_order(saved: &[String]) -> Vec<PromptBlock> {
+/// The saved order, repaired for hand-edited files: names that do not belong to
+/// this layout are dropped, duplicates removed, and any block missing from an
+/// older file is appended in its standard place. Reordering can never lose a
+/// block.
+pub fn normalized_order(saved: &[String], set: &[PromptBlock]) -> Vec<PromptBlock> {
     let mut out = Vec::new();
     for name in saved {
         if let Some(block) = PromptBlock::from_name(name.trim()) {
-            if !out.contains(&block) {
+            if set.contains(&block) && !out.contains(&block) {
                 out.push(block);
             }
         }
     }
-    for block in PromptBlock::DEFAULT_ORDER {
-        if !out.contains(&block) {
-            out.push(block);
+    for block in set {
+        if !out.contains(block) {
+            out.push(*block);
         }
     }
     out
+}
+
+/// The blocks the author switched off, repaired the same way. The task block is
+/// never part of this list: a request without a task has nothing to ask for.
+pub fn normalized_disabled(saved: &[String], set: &[PromptBlock]) -> Vec<PromptBlock> {
+    let mut out = Vec::new();
+    for name in saved {
+        if let Some(block) = PromptBlock::from_name(name.trim()) {
+            if block != PromptBlock::Task && set.contains(&block) && !out.contains(&block) {
+                out.push(block);
+            }
+        }
+    }
+    out
+}
+
+/// Switch one block on or off. Returns false for the task block and for a block
+/// that does not belong to this layout.
+pub fn toggle_disabled(saved: &mut Vec<String>, block: PromptBlock, set: &[PromptBlock]) -> bool {
+    if block == PromptBlock::Task || !set.contains(&block) {
+        return false;
+    }
+    let mut current = normalized_disabled(saved, set);
+    match current.iter().position(|candidate| *candidate == block) {
+        Some(at) => {
+            current.remove(at);
+        }
+        None => current.push(block),
+    }
+    *saved = current
+        .iter()
+        .map(|block| block.name().to_string())
+        .collect();
+    true
+}
+
+/// Back to the built-in layout: standard order, every block switched on.
+pub fn reset_layout(order: &mut Vec<String>, disabled: &mut Vec<String>) {
+    order.clear();
+    disabled.clear();
 }
 
 /// What the model needs to know about the chapter's place in the book. Without
@@ -446,6 +506,10 @@ pub(crate) fn chapter_standing(story: &Story, position: usize, chapter: &Chapter
     }
 }
 
+/// The prompt without the surrounding paragraphs. The app itself always knows
+/// the passage's place and calls [`chat_prompt_with_neighbours`]; tests and the
+/// tuning harness use this shorter form.
+#[cfg(test)]
 pub fn chat_prompt(
     story: &Story,
     chapter: &Chapter,
@@ -454,18 +518,21 @@ pub fn chat_prompt(
     passage: &str,
     settings: &AiSettings,
 ) -> String {
-    // The assistant has to answer questions about the chapter it can see, so it
-    // gets more of the page than a prose draft does. When the endpoint reports
-    // its window, half of it is reserved for the chapter; otherwise the cap is
-    // a cautious default.
-    let chapter_chars = if action == Action::Brainstorm {
-        match settings.context_limit {
-            0 => 12_000,
-            tokens => (tokens / 2 * 4).clamp(6_000, 24_000),
-        }
-    } else {
-        6_000
-    };
+    chat_prompt_with_neighbours(story, chapter, action, ask, passage, None, None, settings)
+}
+
+/// The same prompt, with the paragraphs around the passage. Only Rewrite and
+/// Elaborate use them; the app passes them so a rewrite joins its neighbours.
+pub fn chat_prompt_with_neighbours(
+    story: &Story,
+    chapter: &Chapter,
+    action: Action,
+    ask: &str,
+    passage: &str,
+    before: Option<&str>,
+    after: Option<&str>,
+    settings: &AiSettings,
+) -> String {
     let position = story
         .chapters
         .iter()
@@ -479,90 +546,190 @@ pub fn chat_prompt(
             "\nThe current chapter is empty. Write its opening, not the next sentence of an earlier chapter.\n",
         );
     }
-    let editing = matches!(action, Action::Rewrite | Action::Elaborate);
-    let passage_text = if editing {
-        let shown = if passage.trim().is_empty() {
-            "(the last paragraph of the chapter)"
-        } else {
-            passage.trim()
-        };
-        Some(format!("\nPASSAGE:\n{shown}\n"))
-    } else {
-        None
-    };
-    let steering = chapter.steering.trim();
-    let steering_text = if action.is_prose() && !steering.is_empty() {
-        Some(format!(
-            "\nSTEERING — the author wants the next part to go this way:\n{steering}\n"
-        ))
-    } else {
-        None
-    };
-    let reminder_text = if action.is_prose() {
-        let reminder = match action {
-            Action::Continue => "Write the next paragraphs of prose now. Stay in the same place, time and scene. Return only the prose.",
-            Action::Rewrite => "Rewrite the passage in CONTEXT now. Return only the new passage.",
-            _ => "Expand the passage in CONTEXT now. Keep every event and fact. Return only the expanded scene.",
-        };
-        Some(format!("\nNOW:\n{reminder}\n"))
-    } else {
-        None
-    };
-    let mut chapter_text = current_chapter_block(chapter, chapter_chars);
+    match action {
+        Action::Continue => prose_prompt(story, chapter, position, &task, settings),
+        Action::Brainstorm => assistant_prompt(story, chapter, position, &task, settings),
+        Action::Rewrite | Action::Elaborate => {
+            edit_prompt(story, chapter, action, &task, passage, before, after)
+        }
+    }
+}
+
+/// Take the blocks the author left switched on, in their order.
+fn chosen(
+    blocks: &[(PromptBlock, Option<String>)],
+    order: &[PromptBlock],
+    disabled: &[PromptBlock],
+) -> String {
+    let mut prompt = String::new();
+    for block in order {
+        if disabled.contains(block) {
+            continue;
+        }
+        if let Some((_, Some(text))) = blocks.iter().find(|(candidate, _)| candidate == block) {
+            prompt.push_str(text);
+        }
+    }
+    prompt
+}
+
+/// Continue: the whole writing layout, including steering and the closing
+/// reminder. This is the only recipe the author rearranges.
+fn prose_prompt(
+    story: &Story,
+    chapter: &Chapter,
+    position: usize,
+    task: &str,
+    settings: &AiSettings,
+) -> String {
+    let mut chapter_text = current_chapter_block(chapter, 6_000);
     // A weak model otherwise wanders into a new landscape: name the last
     // lines it must continue from, right next to the chapter text.
-    if action == Action::Continue && !chapter.body.trim().is_empty() {
+    if !chapter.body.trim().is_empty() {
         chapter_text.push_str(&format!(
             "\nTHE CHAPTER ENDS WITH:\n{}\n",
             tail(chapter.body.trim(), 600)
         ));
     }
-
-    // Action-specific blocks keep the tested short frame for Rewrite and
-    // Elaborate; the rest is common and simply ordered by the author.
-    let wide = !editing;
-    let blocks: [(PromptBlock, Option<String>); 11] = [
+    let steering = chapter.steering.trim();
+    let steering_text = (!steering.is_empty()).then(|| {
+        format!("\nSTEERING — the author wants the next part to go this way:\n{steering}\n")
+    });
+    let reminder = "\nNOW:\nWrite the next paragraphs of prose now. Stay in the same place, time and scene. Return only the prose.\n";
+    let blocks = [
         (PromptBlock::Task, Some(format!("TASK:\n{task}\n"))),
         (PromptBlock::Story, Some(story_block(story))),
         (PromptBlock::Premise, premise_block(story)),
         (
             PromptBlock::StorySoFar,
-            wide.then(|| story_so_far_block(story, position, settings.recent_window()))
-                .flatten(),
+            story_so_far_block(story, position, settings.recent_window()),
         ),
         (
             PromptBlock::RecentChapters,
-            wide.then(|| recent_chapters_block(story, position, settings.recent_window()))
-                .flatten(),
+            recent_chapters_block(story, position, settings.recent_window()),
         ),
         (
             PromptBlock::ChapterPosition,
-            wide.then(|| chapter_position_block(story, position, chapter)),
+            Some(chapter_position_block(story, position, chapter)),
         ),
-        (PromptBlock::CurrentChapter, wide.then_some(chapter_text)),
-        (
-            PromptBlock::Lorebook,
-            wide.then(|| lorebook_block(story, chapter)).flatten(),
-        ),
-        (PromptBlock::Passage, passage_text),
+        (PromptBlock::CurrentChapter, Some(chapter_text)),
+        (PromptBlock::Lorebook, lorebook_block(story, chapter)),
         (PromptBlock::Steering, steering_text),
-        (PromptBlock::Reminder, reminder_text),
+        (PromptBlock::Reminder, Some(reminder.to_string())),
     ];
+    let order = normalized_order(&settings.prompts.order, &PromptBlock::PROSE_ORDER);
+    let disabled = normalized_disabled(&settings.prompts.disabled, &PromptBlock::PROSE_ORDER);
+    chosen(&blocks, &order, &disabled)
+}
 
+/// The assistant's context. It has its own layout: steering and the closing
+/// reminder ask for prose and never belong here, and the fixed action rules are
+/// appended after the author's blocks.
+fn assistant_prompt(
+    story: &Story,
+    chapter: &Chapter,
+    position: usize,
+    task: &str,
+    settings: &AiSettings,
+) -> String {
+    // The assistant has to answer questions about the chapter it can see, so it
+    // gets more of the page than a prose draft does. When the endpoint reports
+    // its window, half of it is reserved for the chapter; otherwise the cap is
+    // a cautious default.
+    let chapter_chars = match settings.context_limit {
+        0 => 12_000,
+        tokens => (tokens / 2 * 4).clamp(6_000, 24_000),
+    };
+    let blocks = [
+        (PromptBlock::Task, Some(format!("TASK:\n{task}\n"))),
+        (PromptBlock::Story, Some(story_block(story))),
+        (PromptBlock::Premise, premise_block(story)),
+        (
+            PromptBlock::StorySoFar,
+            story_so_far_block(story, position, settings.recent_window()),
+        ),
+        (
+            PromptBlock::RecentChapters,
+            recent_chapters_block(story, position, settings.recent_window()),
+        ),
+        (
+            PromptBlock::CurrentChapter,
+            Some(current_chapter_block(chapter, chapter_chars)),
+        ),
+        (PromptBlock::Lorebook, lorebook_block(story, chapter)),
+    ];
+    let order = normalized_order(&settings.prompts.chat_order, &PromptBlock::CHAT_ORDER);
+    let disabled = normalized_disabled(&settings.prompts.chat_disabled, &PromptBlock::CHAT_ORDER);
+    let mut prompt = chosen(&blocks, &order, &disabled);
+    // The assistant rules are fixed: they are not a writing block and do not
+    // belong in any sortable layout.
+    prompt.push_str("\n\n");
+    prompt.push_str(ASSISTANT_FRAME);
+    prompt.push('\n');
+    prompt
+}
+
+/// Rewrite and Elaborate replace exactly one passage, so they get a fixed,
+/// small recipe instead of the writing layout: the passage, one paragraph on
+/// each side for continuity, and what the task needs to keep the facts.
+fn edit_prompt(
+    story: &Story,
+    chapter: &Chapter,
+    action: Action,
+    task: &str,
+    passage: &str,
+    before: Option<&str>,
+    after: Option<&str>,
+) -> String {
+    let elaborate = action == Action::Elaborate;
     let mut prompt = String::new();
-    for block in normalized_order(&settings.prompts.order) {
-        if let Some((_, Some(text))) = blocks.iter().find(|(candidate, _)| *candidate == block) {
-            prompt.push_str(text);
+    prompt.push_str(&format!("TASK:\n{task}\n"));
+    prompt.push_str(&story_block(story));
+    if elaborate {
+        if let Some(block) = premise_block(story) {
+            prompt.push_str(&block);
+        }
+        if let Some(block) = lorebook_block(story, chapter) {
+            prompt.push_str(&block);
+        }
+        if let Some(block) = chapter_summary_block(chapter) {
+            prompt.push_str(&block);
         }
     }
-    // The assistant rules are fixed: they are not a writing block and do not
-    // belong in the sortable layout.
-    if action == Action::Brainstorm {
-        prompt.push_str("\n\n");
-        prompt.push_str(ASSISTANT_FRAME);
-        prompt.push('\n');
+    if let Some(text) = before {
+        prompt.push_str(&format!(
+            "\nBEFORE (read-only context, do not return it):\n{text}\n"
+        ));
     }
+    let shown = if passage.trim().is_empty() {
+        "(the selected passage)"
+    } else {
+        passage.trim()
+    };
+    prompt.push_str(&format!("\nPASSAGE:\n{shown}\n"));
+    if let Some(text) = after {
+        prompt.push_str(&format!(
+            "\nAFTER (read-only context, do not return it):\n{text}\n"
+        ));
+    }
+    let reminder = if elaborate {
+        "Expand only the text under PASSAGE now. Return only the expanded passage. Keep every event and fact, and do not repeat the neighbouring paragraphs."
+    } else {
+        "Rewrite only the text under PASSAGE now. Return only that passage, not the BEFORE or AFTER paragraphs. Keep every event, fact and point of view."
+    };
+    prompt.push_str(&format!("\nNOW:\n{reminder}\n"));
     prompt
+}
+
+/// What happened in this chapter so far, when the author has kept a summary.
+fn chapter_summary_block(chapter: &Chapter) -> Option<String> {
+    let summary = chapter.summary.trim();
+    if summary.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "\nCHAPTER SUMMARY (what happened so far in this chapter):\n{summary}\n"
+    ))
 }
 
 /// One block of a chapter. Blocks are summarized independently: the model sees

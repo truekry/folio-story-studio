@@ -85,9 +85,22 @@ impl FolioApp {
                                 }
                                 // The screenshot of the layout shows it alone,
                                 // so a prompt card above it cannot be cut off.
+                                // Two layouts: Continue and the assistant.
+                                // Rewrite and Elaborate do not use one.
                                 if prompt_layout_card(
                                     ui,
+                                    LayoutKind::Writing,
                                     &mut self.library.settings.prompts.order,
+                                    &mut self.library.settings.prompts.disabled,
+                                ) {
+                                    changed = true;
+                                }
+                                ui.add_space(8.0);
+                                if prompt_layout_card(
+                                    ui,
+                                    LayoutKind::Chat,
+                                    &mut self.library.settings.prompts.chat_order,
+                                    &mut self.library.settings.prompts.chat_disabled,
                                 ) {
                                     changed = true;
                                 }

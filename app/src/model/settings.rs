@@ -6,8 +6,14 @@ use super::*;
 pub struct AiSettings {
     #[serde(default = "default_base")]
     pub base_url: String,
-    #[serde(default)]
+    /// The key as it is used. It is never written to `config.json`; only the
+    /// sealed form below is.
+    #[serde(default, skip_serializing)]
     pub api_key: String,
+    /// The same key, sealed for this machine and this data folder. An older
+    /// file's plain `api_key` is still read and sealed on the next save.
+    #[serde(default)]
+    pub api_key_sealed: String,
     #[serde(default = "default_model")]
     pub model: String,
     #[serde(default = "default_temperature")]
@@ -45,10 +51,20 @@ pub struct PromptSetting {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct PromptSettings {
-    /// The order the prompt blocks are assembled in. Empty means the built-in
+    /// The order the writing blocks are assembled in. Empty means the built-in
     /// standard order; unknown or duplicated names are ignored when read.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub order: Vec<String>,
+    /// Blocks the author switched off in the writing layout. They are skipped
+    /// when a continuation is built. The task block can never appear here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub disabled: Vec<String>,
+    /// The same two settings for the assistant's own layout. Older files have
+    /// none and get the standard chat order with every block switched on.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub chat_order: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub chat_disabled: Vec<String>,
     #[serde(default)]
     pub summary: PromptSetting,
     /// The word target for the one text the block summaries are merged into.
@@ -104,6 +120,7 @@ impl Default for AiSettings {
         Self {
             base_url: default_base(),
             api_key: String::new(),
+            api_key_sealed: String::new(),
             model: default_model(),
             temperature: default_temperature(),
             max_tokens: default_max_tokens(),

@@ -579,6 +579,9 @@ pub struct FolioApp {
     library: Library,
     store: Option<Store>,
     shot: Option<Shot>,
+    /// Set by the instance socket when another start asked this window to
+    /// come forward.
+    activated: Option<Arc<AtomicBool>>,
     active_story: usize,
     active_chapter: usize,
     right_open: bool,
@@ -680,6 +683,14 @@ pub struct FolioApp {
 
 impl eframe::App for FolioApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // A second start asked for this window; bring it back after any
+        // minimising, or the focus request would be ignored.
+        if let Some(flag) = &self.activated {
+            if flag.swap(false, Ordering::Relaxed) {
+                ctx.send_viewport_cmd(ViewportCommand::Minimized(false));
+                ctx.send_viewport_cmd(ViewportCommand::Focus);
+            }
+        }
         // Before anything is painted: the chosen look, and nothing else.
         theme::keep(ctx);
         self.clamp();

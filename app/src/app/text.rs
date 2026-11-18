@@ -47,6 +47,22 @@ pub(crate) fn clear_chapter_chat(chapter: &mut Chapter) {
     chapter.chat_summary.clear();
 }
 
+/// The bin belongs to the newest question or answer only: a system note has
+/// nothing to undo, and a running answer is not part of the history yet.
+pub(crate) fn removable_last(chapter: &Chapter, busy: bool) -> bool {
+    !busy
+        && matches!(
+            chapter.chat.last().map(|message| message.role.as_str()),
+            Some("user" | "assistant")
+        )
+}
+
+/// Remove exactly one line of the conversation, the newest. Question and answer
+/// are never grouped, so the author can step back entry by entry.
+pub(crate) fn pop_last_message(chapter: &mut Chapter) -> Option<ChatMessage> {
+    chapter.chat.pop()
+}
+
 /// Add new facts to a lore entry without losing what was already known.
 pub(crate) fn append_lore(existing: &str, facts: &str) -> String {
     let existing = existing.trim();
@@ -100,8 +116,55 @@ pub(crate) fn apply_draft(draft: &Draft, body: &str) -> Result<String, String> {
 /// the next try.
 pub(crate) fn accept_into(chapter: &mut Chapter, draft: &Draft) -> Result<(), String> {
     chapter.body = apply_draft(draft, &chapter.body)?;
-    chapter.steering.clear();
+    // Only a continuation uses up the steering note. A rewrite or an
+    // elaboration leaves the author's note for the next stretch of prose.
+    if draft.action == "continue" {
+        chapter.steering.clear();
+    }
     Ok(())
+}
+
+/// The paragraph before and after a passage, for a rewrite or an elaboration.
+/// Both are shortened: the model should see the join, not a second page.
+pub(crate) fn neighbour_paragraphs(
+    body: &str,
+    range: &Range<usize>,
+) -> (Option<String>, Option<String>) {
+    let paragraphs = paragraph_ranges(body);
+    let before = paragraphs
+        .iter()
+        .take_while(|paragraph| paragraph.end <= range.start)
+        .last()
+        .map(|paragraph| slice_chars(body, paragraph));
+    let after = paragraphs
+        .iter()
+        .find(|paragraph| paragraph.start >= range.end)
+        .map(|paragraph| slice_chars(body, paragraph));
+    (
+        before.map(|text| crate::ai::trim_chars(text.trim(), 600)),
+        after.map(|text| crate::ai::trim_chars(text.trim(), 600)),
+    )
+}
+
+/// True when a draft hands back a long piece of the read-only context around
+/// the passage. The author is told; nothing is blocked or retried.
+pub(crate) fn draft_repeats_neighbour(
+    draft: &str,
+    before: Option<&str>,
+    after: Option<&str>,
+) -> bool {
+    let draft = draft.trim();
+    if draft.is_empty() {
+        return false;
+    }
+    [before, after].into_iter().flatten().any(|neighbour| {
+        let neighbour = neighbour.trim();
+        if neighbour.chars().count() < 40 {
+            return false;
+        }
+        let head: String = neighbour.chars().take(40).collect();
+        draft.contains(&head)
+    })
 }
 
 pub(crate) fn last_paragraph_range(body: &str) -> Option<Range<usize>> {

@@ -38,15 +38,75 @@ pub(crate) fn confirm_width(screen_width: f32) -> f32 {
     room.min(460.0).min((screen_width - 48.0).max(200.0))
 }
 
+/// Which of the two layouts a card edits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LayoutKind {
+    /// Continue. The only recipe the author rearranges.
+    Writing,
+    /// The assistant's context, with its own order and switches.
+    Chat,
+}
+
+impl LayoutKind {
+    fn title(self) -> &'static str {
+        match self {
+            LayoutKind::Writing => "WRITING LAYOUT",
+            LayoutKind::Chat => "CHAT LAYOUT",
+        }
+    }
+
+    fn key(self) -> &'static str {
+        match self {
+            LayoutKind::Writing => "writing",
+            LayoutKind::Chat => "chat",
+        }
+    }
+
+    fn intro(self) -> &'static str {
+        match self {
+            LayoutKind::Writing => {
+                "Shapes Continue. Read top-left to bottom-right; drag a block onto another to move it. Rewrite and Elaborate use their own fixed context and ignore this layout."
+            }
+            LayoutKind::Chat => {
+                "Shapes the assistant's context for this chapter. Same gestures as above; the fixed action rules are always appended after these blocks."
+            }
+        }
+    }
+
+    fn blocks(self) -> &'static [ai::PromptBlock] {
+        match self {
+            LayoutKind::Writing => &ai::PromptBlock::PROSE_ORDER,
+            LayoutKind::Chat => &ai::PromptBlock::CHAT_ORDER,
+        }
+    }
+
+    fn reset_label(self) -> &'static str {
+        match self {
+            LayoutKind::Writing => "Reset writing layout",
+            LayoutKind::Chat => "Reset chat layout",
+        }
+    }
+}
+
 /// One card in the prompt editor: the function's name, the length it aims for,
 /// and the instruction itself.
-/// The prompt layout: twelve equally sized blocks in reading order. Drag one
-/// onto another to move it; Reset restores the standard order.
-pub(crate) fn prompt_layout_card(ui: &mut Ui, saved: &mut Vec<String>) -> bool {
-    let mut blocks = ai::normalized_order(saved);
+/// A layout card: equally sized blocks in reading order. Drag one onto another
+/// to move it; double-click one to switch it off; Reset restores the standard
+/// order and switches every block back on.
+pub(crate) fn prompt_layout_card(
+    ui: &mut Ui,
+    kind: LayoutKind,
+    saved: &mut Vec<String>,
+    disabled: &mut Vec<String>,
+) -> bool {
+    let set = kind.blocks();
+    let mut blocks = ai::normalized_order(saved, set);
+    let mut off = ai::normalized_disabled(disabled, set);
     let mut changed = false;
     let mut drop: Option<(ai::PromptBlock, ai::PromptBlock)> = None;
     let mut hovered_block: Option<ai::PromptBlock> = None;
+    let mut toggle: Option<ai::PromptBlock> = None;
+    let mut reset = false;
     Frame::NONE
         .fill(C::card())
         .stroke(Stroke::new(1.0_f32, C::line()))
@@ -54,14 +114,8 @@ pub(crate) fn prompt_layout_card(ui: &mut Ui, saved: &mut Vec<String>) -> bool {
         .inner_margin(Margin::symmetric(12, 10))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.label(caps("PROMPT LAYOUT", C::accent_deep()));
-            ui.label(
-                RichText::new(
-                    "Read top-left to bottom-right. Drag a block onto another to move it. Blocks that do not apply are skipped; the assistant rules are always appended in the chat.",
-                )
-                .size(9.5)
-                .color(C::muted()),
-            );
+            ui.label(caps(kind.title(), C::accent_deep()));
+            ui.label(RichText::new(kind.intro()).size(9.5).color(C::muted()));
             ui.add_space(5.0);
             let gap = ui.spacing().item_spacing.x;
             let available = ui.available_width();
@@ -77,13 +131,15 @@ pub(crate) fn prompt_layout_card(ui: &mut Ui, saved: &mut Vec<String>) -> bool {
                             break;
                         }
                         let block = blocks[index];
-                        let id = Id::new(("prompt-block", block.name()));
+                        let is_off = off.contains(&block);
+                        let is_task = block == ai::PromptBlock::Task;
+                        let id = Id::new(("prompt-block", kind.key(), block.name()));
                         let (cell, dropped) = ui.dnd_drop_zone::<ai::PromptBlock, _>(
                             Frame::NONE.corner_radius(theme::radius(8)),
                             |ui| {
                                 ui.dnd_drag_source(id, block, |ui| {
                                     Frame::NONE
-                                        .fill(C::soft())
+                                        .fill(if is_off { C::panel() } else { C::soft() })
                                         .stroke(Stroke::new(1.0_f32, C::line()))
                                         .corner_radius(theme::radius(8))
                                         .inner_margin(Margin::symmetric(8, 6))
@@ -96,18 +152,57 @@ pub(crate) fn prompt_layout_card(ui: &mut Ui, saved: &mut Vec<String>) -> bool {
                                                         .size(11.0)
                                                         .color(C::muted()),
                                                 );
-                                                ui.add(
-                                                    Label::new(
-                                                        RichText::new(format!(
-                                                            "{}. {}",
-                                                            index + 1,
-                                                            block.label()
-                                                        ))
-                                                        .size(10.0)
-                                                        .color(C::ink()),
-                                                    )
-                                                    .truncate(),
-                                                );
+                                                let name =
+                                                    format!("{}. {}", index + 1, block.card_label());
+                                                let color = if is_off { C::muted() } else { C::ink() };
+                                                if is_task || is_off {
+                                                    // The chip sits at the right edge;
+                                                    // the name takes what is left.
+                                                    ui.with_layout(
+                                                        Layout::right_to_left(Align::Center),
+                                                        |ui| {
+                                                            if is_task {
+                                                                pill(
+                                                                    ui,
+                                                                    "always on",
+                                                                    C::green(),
+                                                                    C::green_soft(),
+                                                                );
+                                                            } else {
+                                                                pill(
+                                                                    ui,
+                                                                    "off",
+                                                                    C::muted(),
+                                                                    C::panel(),
+                                                                );
+                                                            }
+                                                            ui.with_layout(
+                                                                Layout::left_to_right(
+                                                                    Align::Center,
+                                                                ),
+                                                                |ui| {
+                                                                    ui.add(
+                                                                        Label::new(
+                                                                            RichText::new(&name)
+                                                                                .size(10.0)
+                                                                                .color(color),
+                                                                        )
+                                                                        .truncate(),
+                                                                    );
+                                                                },
+                                                            );
+                                                        },
+                                                    );
+                                                } else {
+                                                    ui.add(
+                                                        Label::new(
+                                                            RichText::new(&name)
+                                                                .size(10.0)
+                                                                .color(color),
+                                                        )
+                                                        .truncate(),
+                                                    );
+                                                }
                                             });
                                         });
                                 })
@@ -117,10 +212,20 @@ pub(crate) fn prompt_layout_card(ui: &mut Ui, saved: &mut Vec<String>) -> bool {
                         // Remember the block under the pointer; its explanation
                         // is shown in the fixed line under the grid.
                         let chip = cell.inner;
-                        if ui.rect_contains_pointer(chip.rect)
-                            && !ui.ctx().is_being_dragged(id)
-                        {
+                        let hovered = ui.rect_contains_pointer(chip.rect)
+                            && !ui.ctx().is_being_dragged(id);
+                        if hovered {
                             hovered_block = Some(block);
+                        }
+                        // A double-click switches the block off or on. It is read
+                        // from the pointer instead of the cell response, because
+                        // the cell only senses dragging.
+                        if hovered
+                            && ui.input(|input| {
+                                input.pointer.button_double_clicked(PointerButton::Primary)
+                            })
+                        {
+                            toggle = Some(block);
                         }
                         if let Some(dragged) = dropped {
                             drop = Some((*dragged, block));
@@ -132,9 +237,13 @@ pub(crate) fn prompt_layout_card(ui: &mut Ui, saved: &mut Vec<String>) -> bool {
             ui.add_space(6.0);
             // A fixed line instead of a tooltip: it cannot flicker or vanish.
             let hint = match hovered_block {
+                Some(block) if off.contains(&block) => format!(
+                    "{} is off — it is not sent. Double-click the block to switch it back on.",
+                    block.label()
+                ),
                 Some(block) => format!("{} — {}", block.label(), block.hint()),
                 None => {
-                    "Hover a block to see what it contains. Drag a block onto another to move it."
+                    "Double-click a block to disable it. Disabled blocks are not sent. Hover a block to see what it contains."
                         .to_string()
                 }
             };
@@ -150,11 +259,19 @@ pub(crate) fn prompt_layout_card(ui: &mut Ui, saved: &mut Vec<String>) -> bool {
                     );
                 });
             ui.add_space(4.0);
-            if ghost(ui, "Reset layout").clicked() {
-                saved.clear();
-                changed = true;
+            if ghost(ui, kind.reset_label()).clicked() {
+                reset = true;
             }
         });
+    if reset {
+        ai::reset_layout(saved, disabled);
+        off.clear();
+        changed = true;
+    } else if let Some(block) = toggle {
+        if ai::toggle_disabled(disabled, block, set) {
+            changed = true;
+        }
+    }
     if let Some((dragged, target)) = drop {
         if ai::move_block(&mut blocks, dragged, target) {
             *saved = blocks
@@ -1041,6 +1158,74 @@ pub(crate) fn avatar(ui: &mut Ui, letter: &str, user: bool) {
         FontId::proportional(8.5),
         Color32::WHITE,
     );
+}
+
+/// The small bin on the newest chat entry. Drawn rather than typed, so it looks
+/// the same in every look and does not depend on a glyph font.
+pub(crate) fn trash_button(ui: &mut Ui) -> Response {
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::click());
+    if !ui.is_rect_visible(rect) {
+        return response;
+    }
+    let painter = ui.painter();
+    if response.hovered() {
+        painter.rect_filled(rect, theme::radius(5), C::soft());
+    }
+    let color = if response.hovered() {
+        C::accent()
+    } else {
+        C::muted()
+    };
+    let stroke = Stroke::new(1.0_f32, color);
+    let body = rect.shrink(3.0);
+    let lid = body.top() + 2.0;
+    let floor = body.bottom();
+    painter.line_segment(
+        [egui::pos2(body.left(), lid), egui::pos2(body.right(), lid)],
+        stroke,
+    );
+    let middle = body.center().x;
+    painter.line_segment(
+        [
+            egui::pos2(middle - 2.0, lid - 2.0),
+            egui::pos2(middle + 2.0, lid - 2.0),
+        ],
+        stroke,
+    );
+    painter.line_segment(
+        [
+            egui::pos2(body.left() + 0.5, lid + 1.0),
+            egui::pos2(body.left() + 1.5, floor),
+        ],
+        stroke,
+    );
+    painter.line_segment(
+        [
+            egui::pos2(body.right() - 0.5, lid + 1.0),
+            egui::pos2(body.right() - 1.5, floor),
+        ],
+        stroke,
+    );
+    painter.line_segment(
+        [
+            egui::pos2(body.left() + 1.5, floor),
+            egui::pos2(body.right() - 1.5, floor),
+        ],
+        stroke,
+    );
+    for offset in [-1.5_f32, 1.5] {
+        painter.line_segment(
+            [
+                egui::pos2(middle + offset, lid + 2.5),
+                egui::pos2(middle + offset, floor - 1.5),
+            ],
+            stroke,
+        );
+    }
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+    }
+    response
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

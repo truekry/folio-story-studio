@@ -109,6 +109,9 @@ impl FolioApp {
             .as_ref()
             .is_some_and(|offer| offer.story_id == story_id && offer.chapter_id == chapter_id);
         let has_chat = !messages.is_empty() || !memory.trim().is_empty();
+        // The bin is only on the newest question or answer, and never while an
+        // answer is still being written.
+        let can_pop = removable_last(chapter, self.job.is_some());
         let window = self.library.settings.recent_window();
         let position = self.active_chapter;
         let recent_summaries = story.recent_summaries(position, window).len();
@@ -168,6 +171,7 @@ impl FolioApp {
         };
         let mut do_copy: Option<String> = None;
         let mut want_clear = false;
+        let mut want_pop = false;
 
         ui.horizontal(|ui| {
             ui.label(caps("Assistant", C::muted()));
@@ -362,7 +366,7 @@ impl FolioApp {
                     });
                     ui.add_space(6.0);
                 }
-                for message in &messages {
+                for (index, message) in messages.iter().enumerate() {
                     if message.role == "note" {
                         ui.vertical_centered(|ui| {
                             ui.label(
@@ -397,6 +401,16 @@ impl FolioApp {
                                 );
                                 if message.demo {
                                     pill(ui, "demo answer", C::amber(), C::amber_soft());
+                                }
+                                if can_pop && index + 1 == messages.len() {
+                                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                        if trash_button(ui)
+                                            .on_hover_text("Remove this last entry")
+                                            .clicked()
+                                        {
+                                            want_pop = true;
+                                        }
+                                    });
                                 }
                             });
                             ui.add_space(2.0);
@@ -499,6 +513,9 @@ impl FolioApp {
         }
         if send {
             self.send_brainstorm();
+        }
+        if want_pop {
+            self.pop_chat_entry(&story_id, &chapter_id);
         }
         if want_clear {
             self.confirm = Some(Confirm::Chat {

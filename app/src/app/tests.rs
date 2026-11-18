@@ -924,3 +924,271 @@ fn confirmations_fit_the_window_they_open_in() {
         );
     }
 }
+
+fn chat_line(role: &str, text: &str) -> ChatMessage {
+    ChatMessage {
+        role: role.to_string(),
+        text: text.to_string(),
+        demo: false,
+    }
+}
+
+#[test]
+fn the_bin_removes_exactly_one_entry_at_a_time() {
+    let mut chapter = Library::sample().stories[0].chapters[1].clone();
+    chapter.chat = vec![
+        chat_line("user", "First question."),
+        chat_line("assistant", "First answer."),
+        chat_line("note", "A quiet note."),
+    ];
+    assert!(
+        !removable_last(&chapter, false),
+        "a system note has nothing to undo"
+    );
+
+    chapter.chat.pop();
+    assert!(removable_last(&chapter, false));
+    assert_eq!(
+        pop_last_message(&mut chapter).map(|message| message.text),
+        Some("First answer.".to_string()),
+        "the answer goes first, not the whole turn"
+    );
+    assert_eq!(chapter.chat.len(), 1);
+    assert_eq!(
+        pop_last_message(&mut chapter).map(|message| message.text),
+        Some("First question.".to_string())
+    );
+    assert!(chapter.chat.is_empty());
+    assert!(pop_last_message(&mut chapter).is_none());
+    assert!(!removable_last(&chapter, false), "an empty chat has no bin");
+}
+
+#[test]
+fn the_bin_is_hidden_while_a_job_is_running() {
+    let mut chapter = Library::sample().stories[0].chapters[1].clone();
+    chapter.chat = vec![chat_line("user", "What should Wren do?")];
+    assert!(removable_last(&chapter, false));
+    assert!(
+        !removable_last(&chapter, true),
+        "a running answer is not part of the history yet"
+    );
+}
+
+/// The layout block senses dragging only, so the double-click is read from the
+/// pointer. Drawing the card head-lessly and clicking twice is the only honest
+/// way to check that the block really switches off.
+#[test]
+fn a_double_click_switches_a_prompt_block_off() {
+    use eframe::egui::{self, Event, Modifiers, PointerButton, Pos2, RawInput, Rect, Vec2};
+
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx, crate::theme::Look::Paper, None);
+    let mut order: Vec<String> = Vec::new();
+    let mut disabled: Vec<String> = Vec::new();
+
+    let draw = |events: Vec<Event>, order: &mut Vec<String>, disabled: &mut Vec<String>| {
+        let input = RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(900.0, 700.0))),
+            events,
+            ..Default::default()
+        };
+        let _ = ctx.run(input, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                prompt_layout_card(ui, LayoutKind::Writing, order, disabled);
+            });
+        });
+    };
+    let click = |at: Pos2, pressed: bool| Event::PointerButton {
+        pos: at,
+        button: PointerButton::Primary,
+        pressed,
+        modifiers: Modifiers::default(),
+    };
+
+    draw(Vec::new(), &mut order, &mut disabled);
+    let id = egui::Id::new(("prompt-block", "writing", "lorebook"));
+    let at = ctx
+        .read_response(id)
+        .expect("the lorebook block was drawn")
+        .rect
+        .center();
+
+    for _ in 0..2 {
+        draw(vec![Event::PointerMoved(at)], &mut order, &mut disabled);
+        draw(vec![click(at, true)], &mut order, &mut disabled);
+        draw(vec![click(at, false)], &mut order, &mut disabled);
+    }
+
+    assert_eq!(
+        disabled,
+        vec!["lorebook".to_string()],
+        "a double-click must switch the block off"
+    );
+    assert!(order.is_empty(), "switching a block off is not a reorder");
+}
+
+#[test]
+fn the_neighbours_around_a_passage_are_read() {
+    let body = "First.\n\nSecond.\n\nThird.\n\nFourth.";
+    let ranges = paragraph_ranges(body);
+
+    let (before, after) = neighbour_paragraphs(body, &ranges[1]);
+    assert_eq!(before.as_deref(), Some("First."));
+    assert_eq!(after.as_deref(), Some("Third."));
+
+    let (before, after) = neighbour_paragraphs(body, &ranges[0]);
+    assert!(
+        before.is_none(),
+        "the first paragraph has nothing before it"
+    );
+    assert_eq!(after.as_deref(), Some("Second."));
+
+    let (before, after) = neighbour_paragraphs(body, &ranges[3]);
+    assert_eq!(before.as_deref(), Some("Third."));
+    assert!(after.is_none(), "the last paragraph has nothing after it");
+
+    // A selection across two paragraphs skips both of them.
+    let across = ranges[1].start..ranges[2].end;
+    let (before, after) = neighbour_paragraphs(body, &across);
+    assert_eq!(before.as_deref(), Some("First."));
+    assert_eq!(after.as_deref(), Some("Fourth."));
+}
+
+#[test]
+fn a_very_long_neighbour_is_shortened() {
+    let body = format!("{}\n\nEnd.", "word ".repeat(300));
+    let ranges = paragraph_ranges(&body);
+    let (before, _) = neighbour_paragraphs(&body, &ranges[1]);
+    let before = before.expect("a neighbour");
+    assert!(before.chars().count() <= 601, "{}", before.chars().count());
+    assert!(before.ends_with('…'));
+}
+
+#[test]
+fn accepting_a_rewrite_keeps_the_steering_note() {
+    let mut chapter = Library::sample().stories[0].chapters[1].clone();
+    chapter.steering = "Bring the storm in from the west.".to_string();
+    let body = chapter.body.clone();
+    let range = last_paragraph_range(&body).expect("last paragraph");
+    let source = slice_chars(&body, &range).to_string();
+    let draft = prose_draft(
+        "rewrite",
+        "A new last paragraph.",
+        &body,
+        Some(range),
+        Some(source),
+    );
+
+    let mut rewritten = chapter.clone();
+    accept_into(&mut rewritten, &draft).expect("accept the rewrite");
+    assert_eq!(
+        rewritten.steering, "Bring the storm in from the west.",
+        "a rewrite must not use up the note for the next continuation"
+    );
+
+    // A continuation does use the note up.
+    let continuation = prose_draft("continue", "More prose.", &body, None, None);
+    accept_into(&mut chapter, &continuation).expect("accept the continuation");
+    assert!(chapter.steering.is_empty());
+}
+
+#[test]
+fn a_draft_that_hands_back_a_neighbour_is_noticed() {
+    let before =
+        "The harbour wall had been patched in her absence with stones of a different grey.";
+    let echoed =
+        "The harbour wall had been patched in her absence with stones, and the paint was new.";
+    assert!(draft_repeats_neighbour(echoed, Some(before), None));
+    assert!(!draft_repeats_neighbour(
+        "She walked to the quay.",
+        Some(before),
+        None
+    ));
+    // A short neighbour is not proof of an echo.
+    assert!(!draft_repeats_neighbour(
+        "Short line.",
+        Some("Short line."),
+        None
+    ));
+}
+
+/// The two cards share block names, so their drag ids must differ; otherwise a
+/// double-click in one layout switches the other one off.
+#[test]
+fn the_two_layout_cards_keep_their_own_switches() {
+    use eframe::egui::{self, Event, Modifiers, PointerButton, Pos2, RawInput, Rect, Vec2};
+
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx, crate::theme::Look::Paper, None);
+    let mut order: Vec<String> = Vec::new();
+    let mut disabled: Vec<String> = Vec::new();
+    let mut chat_order: Vec<String> = Vec::new();
+    let mut chat_disabled: Vec<String> = Vec::new();
+
+    let draw = |events: Vec<Event>,
+                order: &mut Vec<String>,
+                disabled: &mut Vec<String>,
+                chat_order: &mut Vec<String>,
+                chat_disabled: &mut Vec<String>| {
+        let input = RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(900.0, 1400.0))),
+            events,
+            ..Default::default()
+        };
+        let _ = ctx.run(input, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                prompt_layout_card(ui, LayoutKind::Writing, order, disabled);
+                prompt_layout_card(ui, LayoutKind::Chat, chat_order, chat_disabled);
+            });
+        });
+    };
+
+    draw(
+        Vec::new(),
+        &mut order,
+        &mut disabled,
+        &mut chat_order,
+        &mut chat_disabled,
+    );
+    let id = egui::Id::new(("prompt-block", "chat", "lorebook"));
+    let at = ctx
+        .read_response(id)
+        .expect("the chat's lorebook block was drawn")
+        .rect
+        .center();
+    let click = |pressed: bool| Event::PointerButton {
+        pos: at,
+        button: PointerButton::Primary,
+        pressed,
+        modifiers: Modifiers::default(),
+    };
+    for _ in 0..2 {
+        draw(
+            vec![Event::PointerMoved(at)],
+            &mut order,
+            &mut disabled,
+            &mut chat_order,
+            &mut chat_disabled,
+        );
+        draw(
+            vec![click(true)],
+            &mut order,
+            &mut disabled,
+            &mut chat_order,
+            &mut chat_disabled,
+        );
+        draw(
+            vec![click(false)],
+            &mut order,
+            &mut disabled,
+            &mut chat_order,
+            &mut chat_disabled,
+        );
+    }
+
+    assert_eq!(chat_disabled, vec!["lorebook".to_string()]);
+    assert!(
+        disabled.is_empty(),
+        "the writing layout must stay untouched"
+    );
+}

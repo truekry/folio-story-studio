@@ -6,6 +6,8 @@
 //! - [`story`]: story, chapter and draft, plus the content fingerprint
 //! - [`lore`]: lorebook entries and text matching
 //! - [`settings`]: endpoint, model, context window and editable prompts
+//! - [`secrets`]: the API key sealed for this machine and data folder
+//! - [`instance`]: one Folio per data folder, with a wake-up socket
 //! - [`sample`]: the sample library for the demo and screenshots
 //! - [`store`]: loading and saving `library.json`
 //! - [`files`]: file names, chapter text and the PDF/text export
@@ -18,15 +20,18 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 mod files;
+mod instance;
 mod key;
 mod library;
 mod lore;
 mod sample;
+mod secrets;
 mod settings;
 mod store;
 mod story;
 
 pub(crate) use files::*;
+pub(crate) use instance::*;
 pub(crate) use key::*;
 pub(crate) use library::*;
 pub(crate) use lore::*;
@@ -36,7 +41,13 @@ pub(crate) use store::*;
 pub(crate) use story::*;
 
 #[cfg(test)]
+mod instance_tests;
+
+#[cfg(test)]
 mod key_tests;
+
+#[cfg(test)]
+mod secrets_tests;
 
 #[cfg(test)]
 mod store_tests;

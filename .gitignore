@@ -17,3 +17,10 @@ Desktop.ini
 # Local test fixtures and the test bench stay on the author's machine
 /app/tests/
 /testbench/
+
+# Runtime data, in case FOLIO_DATA_DIR points into the checkout
+config.json
+secrets.pepper
+folio.lock
+folio.port
+stories/

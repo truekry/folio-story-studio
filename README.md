@@ -1,6 +1,6 @@
 # Folio – Story Studio
 
-![Version](https://img.shields.io/badge/version-0.2.0-blue)
+![Version](https://img.shields.io/badge/version-0.2.3-blue)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Rust](https://img.shields.io/badge/Rust-2021-orange)
@@ -28,31 +28,31 @@ The app needs no account and no cloud. It talks to any OpenAI-compatible API –
 a local model on your home network as well as a remote service. With no
 endpoint configured, a demo writer steps in so you can try everything.
 
-**Status:** version 0.2.0 – an early but usable release. The library and all
+**Status:** version 0.2.3 – an early but usable release. The library and all
 features are in place, and changes are saved automatically.
 
-## What is new in 0.2.0
+## What is new in 0.2.3
 
-- **Three looks:** **White** (neutral and bright), **Paper** (the warm 0.1.1
-  palette, with serifs) and **Corpo** (graphite and white, tight corners).
-  The choice is kept in `config.json`; the logo and accent stay orange.
-- **One right side panel** with eight views – AI, Lorebook, Settings, Prompts,
-  Summary, Find, Export and Recently deleted – instead of separate windows.
-  It has a close cross and a draggable left edge (320–640 px, clamped to the
-  window).
-- **Prompt layout:** Task, Story, Premise, Story so far, Recent chapters,
-  Chapter position, Current chapter, Lorebook, Passage, Steering and Reminder
-  can be dragged into any order. The assistant rules stay fixed at the end.
-- **Assistant actions:** summary, lore facts from the chapter, and – only when
-  explicitly asked – an **invented** character, place, faction or item. Every
-  proposal waits for Accept/Deny/Retry; invented entries carry an **invented**
-  chip in the lorebook.
-- **Summaries** live in the side panel, save finished blocks as a **partial**
-  summary on Stop, and honour hard word targets with a sentence-safe trim.
-- **Proofreading** asks for exact `OLD`/`NEW` corrections only, so a model
-  that drifts into advice or a rewrite leaves the author's paragraph alone.
-- **A crash log** at `%APPDATA%\Folio\folio-crash.log` records a panic with a
-  backtrace and the last actions, for release builds without a console.
+- **Two layouts.** One grid shapes **Continue**, a second shapes the assistant's
+  context; each has its own order, its own switches and its own reset.
+- **Rewrite and Elaborate got their own recipe.** They are no longer steered by
+  the layout: a rewrite sees the passage plus one paragraph on each side, an
+  elaboration adds the premise, the mentioned lore and the chapter summary. The
+  **Passage** block is gone from the layout, and steering stays where it belongs
+  – with the next continuation.
+- **A chat you can step back.** The newest message in the chapter chat carries a
+  small bin; one click removes exactly that entry, so the conversation can be
+  rolled back line by line. The condensed memory is untouched.
+- **Prompt blocks you can switch off.** A double-click in either layout disables
+  a block and it is no longer sent. The task block always stays on; reset brings
+  every block back.
+- **The API key is sealed.** It is stored as `api_key_sealed`, bound to this
+  machine, this account and a `secrets.pepper` file next to the config. Only the
+  key is unreadable – endpoint, model, prompts and all other settings stay plain
+  JSON. An old plain key is sealed on the first start.
+- **One window per library.** Starting Folio again brings the running window
+  forward instead of opening a second one on the same books. A lock next to
+  `config.json` and a loopback socket do that, so no second process ever writes.
 
 ## Features
 
@@ -61,12 +61,20 @@ features are in place, and changes are saved automatically.
   **Stop** sit right beside it.
 - **Steering bar.** Tell the partner where the next passage should go — a
   storm, a confession, a quieter scene. Leave it empty and the model decides.
+- **Prompt blocks you can thin out.** Two layouts, both with the same gestures:
+  **Writing** shapes Continue, **Chat** shapes the assistant. A double-click
+  switches a block off and it is no longer sent; the task block always stays on.
+  Rewrite and Elaborate ignore the layouts and get their own fixed context.
 - **Rewrite and Elaborate.** Select a passage, right-click, and only that
-  passage is replaced. Folio refuses the draft if the text moved meanwhile.
+  passage is replaced. The model sees the passage and one paragraph on each
+  side — never the whole chapter — and Folio refuses the draft if the text moved
+  meanwhile.
 - **An assistant that reads this chapter.** A separate chat per chapter can
   discuss the page, propose a new summary, extract lore facts, or invent a new
   character, place or item on request. Every action waits for
   Accept/Deny/Retry; invented entries are marked **invented** in the lorebook.
+  The newest message carries a small bin: one click removes exactly that entry,
+  so the chat can be rolled back line by line.
 - **A lorebook that keeps the story straight.** Categories, aliases, trigger
   words and pinning. Mentioned or pinned entries travel with every request, so
   the AI stops contradicting the book.
@@ -90,8 +98,15 @@ features are in place, and changes are saved automatically.
   shows whether it answers, which model it serves and its context window. With
   no endpoint, a demo writer keeps the app usable.
 - **A layout that fits the work.** One right side panel with eight views,
-  prompt blocks you can drag into your own order, and three looks: White,
+  two prompt layouts you can arrange and thin out, and three looks: White,
   Paper and Corpo.
+- **A key that stays on this machine.** The API key is sealed in `config.json`,
+  bound to this computer, your account and a pepper file next to the config.
+  Everything else in the file stays readable and editable.
+- **One window per library.** A second start does not open another window: it
+  brings the running one forward, even out of the taskbar. Two windows writing
+  the same books would overwrite each other. The guard belongs to the data
+  folder, so a separate test folder can still run beside it.
 
 ## Download
 
@@ -141,7 +156,7 @@ cd app
 cargo test
 ```
 
-220 tests pass on any machine. Fourteen more are integration tests that need a
+264 tests pass on any machine. Fourteen more are integration tests that need a
 real OpenAI-compatible endpoint or a local test setup; they are marked
 `#[ignore]` so the normal run stays offline and fast. Point them at your own
 endpoint and include the ignored tests:
@@ -174,7 +189,8 @@ app/
 │   ├── ai/         prompts, endpoint, streaming, lore suggestions, proofreading,
 │   │               budgets and the demo writer
 │   ├── model/      library, story/chapter/draft, settings, keys,
-│   │               store (config.json, one file per book), export
+│   │               store (config.json, one file per book), the sealed API key,
+│   │               the one-instance guard, export
 │   ├── pdf/        small PDF writer without external dependencies
 │   ├── theme.rs    three looks (White, Paper, Corpo)
 │   ├── fonts.rs    system fonts
@@ -198,9 +214,13 @@ place.
   `%APPDATA%\Folio\stories\<key>.json` (on Linux/macOS: `~/.folio/`).
 - An older single `library.json` is converted once on start. The old file is
   kept as `library.json.migrated-*` next to the new layout.
-- These files are readable JSON and **also contain the endpoint address, the
-  model name and, if set, the API key in plain text**. Keep them out of
-  repositories and out of cloud backups you share.
+- These files are readable JSON: the endpoint address, the model name, the
+  prompts and every other setting can be read and edited. **Only the API key is
+  sealed**: it is stored as `api_key_sealed` and bound to this machine, this
+  account and the `secrets.pepper` file next to the config. A copied
+  `config.json` opens on no other machine; keep `secrets.pepper` with it, or the
+  key must be entered again. This protects the file at rest, not against
+  malware running as you.
 - Folio sends no telemetry. Network traffic goes only to the configured
   endpoint.
 - If a book file cannot be read, Folio sets it aside as `*.broken-*` and keeps
@@ -213,9 +233,9 @@ place.
 | --- | --- |
 | ![Draft](app/shots/draft-paper.png) | ![Summary](app/shots/summary-paper.png) |
 
-| Prompt layout | Lore proposal |
+| Prompt layouts | Lore proposal |
 | --- | --- |
-| ![Prompt layout](app/shots/prompt-layout-paper.png) | ![Lore](app/shots/lore-proposal-paper.png) |
+| ![Prompt layouts](app/shots/prompt-layout-paper.png) | ![Lore](app/shots/lore-proposal-paper.png) |
 
 | Assistant: lore facts | Assistant: invented character |
 | --- | --- |

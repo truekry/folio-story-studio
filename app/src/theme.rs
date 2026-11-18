@@ -24,7 +24,7 @@ pub enum Look {
     /// Neutral greys and a light navigation column, with the brand orange as
     /// accent.
     White,
-    /// Warm paper, dark ink, terracotta â€” the original look.
+    /// Warm paper, dark ink, terracotta — the original look.
     Paper,
     /// Graphite and near-black with light text, accented in the brand orange.
     Corpo,
@@ -55,7 +55,7 @@ impl Look {
     pub fn note(self) -> &'static str {
         match self {
             Look::White => "Clean and neutral, close to Windows itself.",
-            Look::Paper => "Warm paper and ink â€” Folio's original writing desk.",
+            Look::Paper => "Warm paper and ink — Folio's original writing desk.",
             Look::Corpo => "Graphite and white, tight and modern.",
         }
     }

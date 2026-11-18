@@ -29,6 +29,29 @@ impl FolioApp {
             let (library, store, report) = Store::open(&crate::model::data_dir());
             (library, Some(store), report)
         };
+        // Publish the wake-up socket for this data folder. The guard from
+        // `main` already kept a second writer out; this lets the next start
+        // bring this window forward instead of closing silently.
+        let activated = if screenshot_mode {
+            None
+        } else {
+            let dir = store
+                .as_ref()
+                .map(|store| store.dir().to_path_buf())
+                .unwrap_or_else(crate::model::data_dir);
+            let flag = Arc::new(AtomicBool::new(false));
+            let wake = Arc::clone(&flag);
+            let ctx = cc.egui_ctx.clone();
+            if let Err(error) = crate::model::serve(&dir, move || {
+                wake.store(true, Ordering::Relaxed);
+                ctx.request_repaint();
+            }) {
+                // The folder lock still protects the books; only the focus
+                // request is lost.
+                eprintln!("Folio cannot wake a second start: {error}");
+            }
+            Some(flag)
+        };
         // The look and the writing face can only be read once the library is
         // open. Both happen before the first frame, so nothing flashes.
         let writing = std::path::PathBuf::from(&library.writing_font);
@@ -163,6 +186,7 @@ impl FolioApp {
             library,
             store,
             shot,
+            activated,
             active_story,
             active_chapter,
             right_open: true,

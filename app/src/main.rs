@@ -26,6 +26,22 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
+    // One Folio per data folder. A second start asks the running window to
+    // come forward and exits before any window of its own exists.
+    let _instance = match screenshot {
+        None => match model::start(&model::data_dir()) {
+            model::Start::First(guard) => Some(guard),
+            model::Start::Running => return Ok(()),
+            model::Start::Unguarded(error) => {
+                eprintln!("Folio could not lock its data folder: {error}");
+                None
+            }
+        },
+        // A screenshot run only reads; it must not steal the lock from an open
+        // window, and must not be blocked by one either.
+        Some(_) => None,
+    };
+
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("Folio — Story Studio")
         .with_inner_size([1440.0, 900.0])

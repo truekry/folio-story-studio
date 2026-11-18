@@ -291,6 +291,28 @@ impl FolioApp {
         self.notify("Conversation cleared.", false);
     }
 
+    /// Remove the newest line of this chapter's conversation. Only ever one
+    /// entry, so the author can walk back step by step; the condensed memory
+    /// and the chapter itself stay untouched.
+    pub(crate) fn pop_chat_entry(&mut self, story_id: &str, chapter_id: &str) {
+        let popped = self
+            .library
+            .story_mut(story_id)
+            .and_then(|story| story.chapter_mut(chapter_id))
+            .and_then(pop_last_message);
+        let Some(message) = popped else {
+            return;
+        };
+        // The question behind a waiting proposal is gone, so the proposal is too.
+        if message.role == "user" && message.text.trim() == self.assistant_ask.trim() {
+            self.clear_assistant();
+        }
+        self.scroll_chat = true;
+        self.chat_follow = true;
+        self.mark_dirty();
+        self.notify("Last entry removed.", false);
+    }
+
     pub(crate) fn restore_trash(&mut self, trash_id: u64) {
         let Some(position) = self.trash.iter().position(|item| item.id() == trash_id) else {
             return;

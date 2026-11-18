@@ -44,6 +44,14 @@ impl FolioApp {
                 .as_ref()
                 .map(|r| slice_chars(&body, r).to_string())
                 .unwrap_or_default();
+            // A rewrite only makes sense next to the paragraphs it joins; the
+            // model gets them as read-only context.
+            let (neighbour_before, neighbour_after) = match range.as_ref() {
+                Some(range) if matches!(action, Action::Rewrite | Action::Elaborate) => {
+                    neighbour_paragraphs(&body, range)
+                }
+                _ => (None, None),
+            };
             let demo_text = if demo {
                 Some(ai::demo_reply(action, story, chapter, &ask, &passage))
             } else {
@@ -52,12 +60,14 @@ impl FolioApp {
             let prompt = if demo {
                 None
             } else {
-                Some(ai::chat_prompt(
+                Some(ai::chat_prompt_with_neighbours(
                     story,
                     chapter,
                     action,
                     &ask,
                     &passage,
+                    neighbour_before.as_deref(),
+                    neighbour_after.as_deref(),
                     &self.library.settings,
                 ))
             };
