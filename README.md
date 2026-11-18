@@ -1,6 +1,6 @@
 # Folio – Story Studio
 
-![Version](https://img.shields.io/badge/version-0.1.1-blue)
+![Version](https://img.shields.io/badge/version-0.2.0-blue)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Rust](https://img.shields.io/badge/Rust-2021-orange)
@@ -9,7 +9,7 @@
 A library, a chapter desk, a lorebook and a brainstorming chat – built as a
 native Rust application (egui/eframe) for Windows.
 
-![Folio with the dark theme](app/shots/main-dark.png)
+![Folio in the Paper look](app/shots/main-paper.png)
 
 > **Transparency:** Folio is a joint human–AI project. The idea, design,
 > requirements and sign-off come from **truekry**; the code, tests and
@@ -28,10 +28,33 @@ The app needs no account and no cloud. It talks to any OpenAI-compatible API –
 a local model on your home network as well as a remote service. With no
 endpoint configured, a demo writer steps in so you can try everything.
 
-**Status:** version 0.1.1 – an early but usable release. The library and all
+**Status:** version 0.2.0 – an early but usable release. The library and all
 features are in place, and changes are saved automatically.
 
-## What is new in 0.1.1
+## What is new in 0.2.0
+
+- **Three looks:** **White** (neutral and bright), **Paper** (the warm 0.1.1
+  palette, with serifs) and **Corpo** (graphite and white, tight corners).
+  The choice is kept in `config.json`; the logo and accent stay orange.
+- **One right side panel** with eight views – AI, Lorebook, Settings, Prompts,
+  Summary, Find, Export and Recently deleted – instead of separate windows.
+  It has a close cross and a draggable left edge (320–640 px, clamped to the
+  window).
+- **Prompt layout:** Task, Story, Premise, Story so far, Recent chapters,
+  Chapter position, Current chapter, Lorebook, Passage, Steering and Reminder
+  can be dragged into any order. The assistant rules stay fixed at the end.
+- **Assistant actions:** summary, lore facts from the chapter, and – only when
+  explicitly asked – an **invented** character, place, faction or item. Every
+  proposal waits for Accept/Deny/Retry; invented entries carry an **invented**
+  chip in the lorebook.
+- **Summaries** live in the side panel, save finished blocks as a **partial**
+  summary on Stop, and honour hard word targets with a sentence-safe trim.
+- **Proofreading** asks for exact `OLD`/`NEW` corrections only, so a model
+  that drifts into advice or a rewrite leaves the author's paragraph alone.
+- **A crash log** at `%APPDATA%\Folio\folio-crash.log` records a panic with a
+  backtrace and the last actions, for release builds without a console.
+
+## What was new in 0.1.1
 
 - **Readable messages:** confirmation dialogs and toasts wrap long text, and
   their buttons stay reachable in small windows.
@@ -62,23 +85,28 @@ features are in place, and changes are saved automatically.
 - **Rewrite and Elaborate**: select text, right-click – only the selected
   passage is replaced, with a check that it has not moved in the meantime.
 - **Brainstorm chat** per chapter, separate from the chapter text. Long
-  conversations are condensed so the context window lasts.
+  conversations are condensed so the context window lasts. The assistant can
+  propose a summary, lore facts from the chapter, or an explicitly requested
+  invention; nothing changes without Accept.
 - **Lorebook** with categories, aliases, trigger words and pinning. On request
-  the AI suggests new entries from a passage.
-- **Summaries** in their own window and as long-term memory. A chapter is
+  the AI suggests new entries from a passage, and an explicitly invented entry
+  is marked **invented**.
+- **Summaries** in the right side panel and as long-term memory. A chapter is
   summarised in blocks of about 1,200 words, each block on its own, and the
   blocks are merged into one text afterwards. Older chapters without a usable
-  summary are caught up on request; a running pass can be stopped.
+  summary are caught up on request; a running pass can be stopped and saves the
+  finished blocks as a partial summary.
 - **Find and replace** in the open chapter or the whole book, with undo.
-- **Spelling and grammar** checked paragraph by paragraph, with suggestions
-  accepted one at a time.
+- **Spelling and grammar** checked paragraph by paragraph. Only exact
+  corrections are applied; a model that returns advice or a rewrite leaves the
+  paragraph unchanged.
 - **Export** as one PDF for the whole story or one text file per chapter.
 - **Endpoint lamp** shows whether the endpoint is reachable, which model
   answers, and how large its context window is.
-- **Light and dark** following the system setting, plus system fonts and a
+- **Three looks** – White, Paper and Corpo – plus system fonts and a
   selectable text size for the desk.
 - **Readable everywhere:** long messages, warnings and confirmation dialogs
-  wrap instead of running out of the window; the Settings window scrolls and
+  wrap instead of running out of the window; the Settings view scrolls and
   keeps its footer in place.
 
 ## Download
@@ -129,10 +157,10 @@ cd app
 cargo test
 ```
 
-159 tests pass on any machine. Six more are integration tests against a real
-OpenAI-compatible endpoint; they are marked `#[ignore]` so the normal run stays
-offline and fast. Point them at your own endpoint and include the ignored
-tests:
+220 tests pass on any machine. Fourteen more are integration tests that need a
+real OpenAI-compatible endpoint or a local test setup; they are marked
+`#[ignore]` so the normal run stays offline and fast. Point them at your own
+endpoint and include the ignored tests:
 
 ```bash
 FOLIO_LAN_URL=http://localhost:1234/v1 cargo test -- --include-ignored --test-threads=1
@@ -164,12 +192,12 @@ app/
 │   ├── model/      library, story/chapter/draft, settings, keys,
 │   │               store (config.json, one file per book), export
 │   ├── pdf/        small PDF writer without external dependencies
-│   ├── theme.rs    colours for day and night
+│   ├── theme.rs    three looks (White, Paper, Corpo)
 │   ├── fonts.rs    system fonts
 │   ├── folder.rs   open a folder in Explorer
 │   └── main.rs     startup, window, icon
 ├── assets/         icons and the Windows resource file
-├── tools/          make_icon.py, mock_endpoint.py (for tests)
+├── tools/          make_icon.py
 ├── shots/          screenshots
 ├── build.rs        icon and version data in the executable
 ├── Cargo.toml
@@ -197,16 +225,26 @@ place.
 
 ## Screenshots
 
-| Draft below the chapter | Summary in its own window |
+| Draft below the chapter | Summary in the side panel |
 | --- | --- |
-| ![Draft](app/shots/draft-ready-dark.png) | ![Summary](app/shots/summary-popup-dark.png) |
+| ![Draft](app/shots/draft-paper.png) | ![Summary](app/shots/summary-paper.png) |
 
-| Find and replace | AI lore suggestion |
+| Find and replace | Lore proposal |
 | --- | --- |
-| ![Find](app/shots/find-replace-dark.png) | ![Lore](app/shots/lore-proposal-dark.png) |
+| ![Find](app/shots/find-replace-paper.png) | ![Lore](app/shots/lore-proposal-paper.png) |
 
-More images are in `app/shots/`, among them `main-light.png` for the light
-theme and `prompts-dark.png` for the prompt editor.
+| Assistant: lore facts | Assistant: invented character |
+| --- | --- |
+| ![Lore card](app/shots/assistant-lore-paper.png) | ![Invent card](app/shots/assistant-invent-paper.png) |
+
+| White look | Corpo look |
+| --- | --- |
+| ![White](app/shots/main-white.png) | ![Corpo](app/shots/main-corpo.png) |
+
+More images are in `app/shots/`, among them `settings-paper.png`,
+`prompts-paper.png`, `prompt-layout-paper.png`, `lore-paper.png`,
+`export-paper.png`, `trash-paper.png`, `proofread-paper.png` and
+`steering-paper.png`.
 
 ## Origin and authors
 

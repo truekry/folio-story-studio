@@ -35,6 +35,7 @@ pub(crate) fn lore(
         triggers: triggers.to_string(),
         description: description.to_string(),
         pinned,
+        invented: false,
     }
 }
 

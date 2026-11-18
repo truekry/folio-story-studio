@@ -70,6 +70,50 @@ impl FolioApp {
                         if belongs {
                             if let Some(mut live) = self.draft_live.take() {
                                 live.draft.text = text.trim().to_string();
+                                // A local model sometimes hands the passage
+                                // back unchanged. That is not a rewrite: ask
+                                // once more with a sharper instruction, and
+                                // never store a second echo as a draft.
+                                let echoed = action == Action::Rewrite
+                                    && live.draft.source.as_ref().is_some_and(|source| {
+                                        echo_similarity(&live.draft.text, source) >= 0.95
+                                    });
+                                if echoed && live.guard_attempt == 0 {
+                                    let range = live.draft.range;
+                                    self.draft_live = Some(live);
+                                    if let Some((start, end)) = range {
+                                        self.editor_selection = Some(start..end);
+                                    }
+                                    self.rewrite_nudge = true;
+                                    self.notify(
+                                        "The AI repeated the passage. Asking once more for a real rewrite.",
+                                        false,
+                                    );
+                                    self.run_action_inner(Action::Rewrite, String::new(), true);
+                                    if let Some(next) = self.draft_live.as_mut() {
+                                        next.guard_attempt = 1;
+                                    }
+                                    ctx.request_repaint();
+                                    return;
+                                }
+                                if echoed {
+                                    // Keep the block with an empty text so
+                                    // Delete and Retry stay reachable.
+                                    live.draft.text.clear();
+                                    live.draft.stopped = true;
+                                    self.draft_live = Some(live);
+                                    self.draft_error = Some(
+                                        "The AI repeated the passage word for word instead of rewriting it. Retry for a new version."
+                                            .to_string(),
+                                    );
+                                    self.notify(
+                                        "Nothing was saved — the answer was the passage again.",
+                                        true,
+                                    );
+                                    ctx.request_repaint();
+                                    return;
+                                }
+                                let words = live.draft.text.split_whitespace().count();
                                 if let Some(chapter) = self
                                     .library
                                     .story_mut(&job.story_id)
@@ -79,6 +123,18 @@ impl FolioApp {
                                 }
                                 self.draft_error = None;
                                 self.mark_dirty();
+                                if action == Action::Continue {
+                                    let target =
+                                        action.kind().words(&self.library.settings.prompts);
+                                    if target > 0 && words > (target as usize * 3) / 2 {
+                                        self.notify(
+                                            format!(
+                                                "The draft is longer than the {target}-word target. Retry for a shorter one."
+                                            ),
+                                            false,
+                                        );
+                                    }
+                                }
                                 if job.story_id == self.story_id() {
                                     self.draft_follow = true;
                                     self.draft_reveal = true;
@@ -89,21 +145,54 @@ impl FolioApp {
                     } else {
                         let answer = text.trim().to_string();
                         if !answer.is_empty() {
-                            if let Some(chapter) = self
+                            // The chat can carry an action block. The prose goes
+                            // into the conversation; the action waits below it
+                            // for Accept, Deny or Retry.
+                            let ask = std::mem::take(&mut self.assistant_ask);
+                            let parsed = self
                                 .library
-                                .story_mut(&job.story_id)
-                                .and_then(|story| story.chapter_mut(&job.chapter_id))
-                            {
-                                chapter.chat.push(ChatMessage {
-                                    role: "assistant".to_string(),
-                                    text: answer,
-                                    demo: false,
-                                });
+                                .story(&job.story_id)
+                                .map(|story| ai::parse_assistant_reply(&answer, story, &ask));
+                            let (prose, action) = match parsed {
+                                Some(reply) => (reply.prose, reply.action),
+                                None => (answer.clone(), None),
+                            };
+                            let action_allowed = ai::asks_for_action(&ask);
+                            let prose = ai::chat_text(&prose, action.is_some(), action_allowed);
+                            let propose = action.is_some() && action_allowed;
+                            if !propose && !prose.is_empty() {
+                                if let Some(chapter) = self
+                                    .library
+                                    .story_mut(&job.story_id)
+                                    .and_then(|story| story.chapter_mut(&job.chapter_id))
+                                {
+                                    chapter.chat.push(ChatMessage {
+                                        role: "assistant".to_string(),
+                                        text: prose,
+                                        demo: false,
+                                    });
+                                }
+                                if job.story_id == self.story_id() {
+                                    self.scroll_chat = true;
+                                }
+                                self.mark_dirty();
                             }
-                            if job.story_id == self.story_id() {
-                                self.scroll_chat = true;
+                            if propose {
+                                if let Some(action) = action {
+                                    self.assistant_proposal = Some(AssistantProposal {
+                                        story_id: job.story_id.clone(),
+                                        chapter_id: job.chapter_id.clone(),
+                                        ask,
+                                        action,
+                                    });
+                                    if job.story_id == self.story_id() {
+                                        self.scroll_chat = true;
+                                        self.chat_follow = true;
+                                    }
+                                }
                             }
-                            self.mark_dirty();
+                        } else {
+                            self.assistant_ask.clear();
                         }
                         ctx.request_repaint();
                     }
@@ -150,6 +239,9 @@ impl FolioApp {
                 }
                 // A failed request ends the whole run; otherwise the queue would
                 // sit there with nothing driving it.
+                if matches!(job.kind, JobKind::Action(Action::Brainstorm)) {
+                    self.assistant_ask.clear();
+                }
                 self.summary_queue.clear();
                 self.summary_batch = None;
                 self.notify(format!("AI request failed: {error}"), true);

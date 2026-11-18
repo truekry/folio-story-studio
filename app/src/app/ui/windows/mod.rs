@@ -1,4 +1,4 @@
-//! Which window is open, and the notices at the bottom.
+//! The dialogs that stay real windows, and the notices at the bottom.
 
 use super::*;
 
@@ -14,18 +14,12 @@ mod trash;
 
 impl FolioApp {
     pub(crate) fn dialogs(&mut self, ctx: &egui::Context) {
-        self.settings_window(ctx);
-        self.prompts_window(ctx);
-        self.summary_window(ctx);
-        self.export_window(ctx);
         self.story_editor_window(ctx);
         self.new_story_window(ctx);
         self.new_chapter_window(ctx);
         self.chapter_editor_window(ctx);
         self.lore_editor_window(ctx);
         self.lore_proposal_window(ctx);
-        self.trash_window(ctx);
-        self.find_window(ctx);
         self.confirm_window(ctx);
     }
 
@@ -54,7 +48,7 @@ impl FolioApp {
             .show(ctx, |ui| {
                 Frame::NONE
                     .fill(if error { C::red_deep() } else { C::toast() })
-                    .corner_radius(10)
+                    .corner_radius(theme::radius(10))
                     .inner_margin(Margin::symmetric(14, 9))
                     .show(ui, |ui| {
                         // The text gets a real column to wrap in. The action
@@ -76,7 +70,7 @@ impl FolioApp {
                                             .color(C::ink()),
                                     )
                                     .fill(C::card())
-                                    .corner_radius(6),
+                                    .corner_radius(theme::radius(6)),
                                 )
                                 .on_hover_text(match &undo {
                                     Some(UndoAction::Replace(_)) => {

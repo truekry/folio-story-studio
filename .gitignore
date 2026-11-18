@@ -13,3 +13,7 @@ Desktop.ini
 # Local scratch (screenshots, archives, logs)
 *.log
 *.zip
+
+# Local test fixtures and the test bench stay on the author's machine
+/app/tests/
+/testbench/

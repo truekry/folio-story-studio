@@ -1,13 +1,11 @@
-//! The settings window: endpoint, model and context.
+//! The settings view in the side panel: appearance, endpoint, model and context.
 
 use super::*;
 
 impl FolioApp {
-    pub(crate) fn settings_window(&mut self, ctx: &egui::Context) {
-        if !self.settings_open {
-            return;
-        }
-        let mut open = self.settings_open;
+    /// The settings as one view of the side panel: endpoint, model, context,
+    /// appearance and the way to the prompts.
+    pub(crate) fn ui_settings(&mut self, ui: &mut Ui) {
         let mut s = self.library.settings.clone();
         let mut do_test = false;
         let mut do_fetch_models = false;
@@ -18,7 +16,6 @@ impl FolioApp {
         let testing = self.test_rx.is_some();
         let fetching_models = self.models_rx.is_some();
         let test_status = self.test_status.clone();
-        let show_summary_before = self.library.show_summary;
         let store_dir = self.store.as_ref().map(|store| store.dir().to_path_buf());
         let store_path = self
             .store
@@ -32,36 +29,27 @@ impl FolioApp {
             })
             .unwrap_or_else(|| "Preview — nothing is saved".to_string());
 
-        Window::new("AI endpoint & settings")
-            .id(Id::new("settings-window"))
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(true)
-            .default_size(Vec2::new(600.0, 640.0))
-            .min_size(Vec2::new(520.0, 360.0))
-            .max_height(ctx.screen_rect().height() - 80.0)
-            .show(ctx, |ui| {
-                // The decisions stay on a fixed strip, as in the prompt
-                // editor, so "Done" is reachable no matter how short the
-                // screen is or how far the settings have been scrolled.
-                TopBottomPanel::bottom(Id::new("settings-footer"))
-                    .frame(Frame::NONE)
-                    .show_inside(ui, |ui| {
-                        ui.add_space(6.0);
-                        ui.separator();
-                        ui.add_space(2.0);
-                        ui.horizontal(|ui| {
-                            if primary(ui, "Done").clicked() {
-                                close = true;
-                            }
-                            ui.label(
-                                RichText::new("Settings save automatically.")
-                                    .size(9.5)
-                                    .color(C::muted()),
-                            );
-                        });
-                    });
-                CentralPanel::default()
+        // The decisions stay on a fixed strip, as in the prompt
+        // editor, so "Done" is reachable no matter how short the
+        // screen is or how far the settings have been scrolled.
+        TopBottomPanel::bottom(Id::new("settings-footer"))
+            .frame(Frame::NONE)
+            .show_inside(ui, |ui| {
+                ui.add_space(6.0);
+                ui.separator();
+                ui.add_space(2.0);
+                ui.horizontal(|ui| {
+                    if primary(ui, "Done").clicked() {
+                        close = true;
+                    }
+                    ui.label(
+                        RichText::new("Settings save automatically.")
+                            .size(9.5)
+                            .color(C::muted()),
+                    );
+                });
+            });
+        CentralPanel::default()
                     .frame(Frame::NONE)
                     .show_inside(ui, |ui| {
                         ScrollArea::vertical()
@@ -71,6 +59,35 @@ impl FolioApp {
                             )
                             .auto_shrink([false, false])
                             .show(ui, |ui| {
+                                ui.label(caps("APPEARANCE", C::accent_deep()));
+                                ui.label(
+                                    RichText::new(
+                                        "How Folio looks. The choice is kept with this library.",
+                                    )
+                                    .size(11.5)
+                                    .color(C::ink_soft()),
+                                );
+                                ui.add_space(4.0);
+                                field_label(ui, "Look");
+                                let mut chosen = theme::look();
+                                egui::ComboBox::from_id_salt("look-pick")
+                                    .selected_text(chosen.label())
+                                    .width(180.0)
+                                    .show_ui(ui, |ui| {
+                                        for option in crate::theme::Look::ALL {
+                                            ui.selectable_value(&mut chosen, option, option.label())
+                                                .on_hover_text(option.note());
+                                        }
+                                    });
+                                ui.label(RichText::new(chosen.note()).size(9.5).color(C::muted()));
+                                if chosen != theme::look() {
+                                    theme::apply_style(ui.ctx(), chosen);
+                                    self.library.look = chosen;
+                                    self.mark_dirty();
+                                }
+                                ui.add_space(10.0);
+                                ui.separator();
+                                ui.add_space(8.0);
                                 ui.label(
                                     RichText::new("BRING YOUR OWN AI")
                                         .size(9.5)
@@ -175,25 +192,50 @@ impl FolioApp {
                                         .color(C::muted()),
                                 );
                                 ui.add_space(8.0);
-                                ui.horizontal_wrapped(|ui| {
-                                    ui.add(
-                                        egui::Slider::new(&mut s.temperature, 0.0..=1.5)
-                                            .text("Creativity")
-                                            .fixed_decimals(2),
-                                    );
-                                    ui.add_space(10.0);
-                                    ui.add(
-                                        egui::Slider::new(&mut s.max_tokens, 128..=2048)
-                                            .text("Reply tokens")
-                                            .logarithmic(true),
-                                    );
-                                });
+                                ui.add(
+                                    egui::Slider::new(&mut s.temperature, 0.0..=1.5)
+                                        .text("Creativity")
+                                        .fixed_decimals(2),
+                                );
+                                ui.add(
+                                    egui::Slider::new(&mut s.max_tokens, 128..=2048)
+                                        .text("Reply tokens")
+                                        .logarithmic(true),
+                                );
                                 ui.add_space(8.0);
                                 field_label(ui, "Chapter summaries in the AI context");
                                 ui.add(
                                     egui::Slider::new(&mut s.summary_window, 0..=crate::model::MAX_SUMMARY_WINDOW)
                                         .text("recent summaries sent in full"),
                                 );
+                                ui.add_space(6.0);
+                                field_label(ui, "Block size for long chapters");
+                                ui.horizontal_wrapped(|ui| {
+                                    let mut block = s.summary_block_size as u32;
+                                    if word_target(
+                                        ui,
+                                        "summary-block-size",
+                                        &mut block,
+                                        ai::SUMMARY_BLOCK_MIN_WORDS as u32
+                                            ..=ai::SUMMARY_BLOCK_MAX_WORDS as u32,
+                                        "How many words one summary block holds. A block always ends at a sentence; if the limit falls inside one, the block runs to its end instead of cutting it.",
+                                    ) {
+                                        s.summary_block_size = block as usize;
+                                    }
+                                    ui.label(
+                                        RichText::new("words per block")
+                                            .size(9.5)
+                                            .color(C::muted()),
+                                    );
+                                });
+                                ui.label(
+                                    RichText::new(
+                                        "When the limit is reached, the block ends at the last sentence end — never in the middle of a sentence.",
+                                    )
+                                    .size(9.5)
+                                    .color(C::muted()),
+                                );
+                                ui.add_space(4.0);
                                 ui.label(
                                     RichText::new(
                                         "Everything older is folded into one story-so-far block, so a long book still fits. Pressing Summarize first writes the missing summaries for those older chapters.",
@@ -208,11 +250,6 @@ impl FolioApp {
                                     .size(9.5)
                                     .color(C::muted()),
                                 );
-                                ui.add_space(4.0);
-                                ui.checkbox(
-                                    &mut self.library.show_summary,
-                                    "Show a Summary… button under the chapter title",
-                                );
                                 ui.add_space(8.0);
                                 ui.separator();
                                 ui.horizontal(|ui| {
@@ -224,7 +261,7 @@ impl FolioApp {
                                     )
                                     .fill(C::soft())
                                     .stroke(Stroke::new(1.0_f32, C::line()))
-                                    .corner_radius(8);
+                                    .corner_radius(theme::radius(8));
                                     if ui.add_enabled(!testing, button).clicked() {
                                         do_test = true;
                                     }
@@ -266,7 +303,7 @@ impl FolioApp {
                                     )
                                     .fill(C::soft())
                                     .stroke(Stroke::new(1.0_f32, C::line()))
-                                    .corner_radius(8);
+                                    .corner_radius(theme::radius(8));
                                     if ui.add(button).clicked() {
                                         do_prompts = true;
                                     }
@@ -298,22 +335,23 @@ impl FolioApp {
                                             crate::folder::open_folder(dir);
                                         }
                                     }
-                                    ui.label(
+                                });
+                                ui.add(
+                                    Label::new(
                                         RichText::new("Stories save automatically while you write. Ctrl+S saves immediately.")
                                             .size(9.5)
                                             .italics()
                                             .color(C::muted()),
-                                    );
-                                });
+                                    )
+                                    .wrap(),
+                                );
                                 ui.add_space(8.0);
                             });
                     });
-            });
 
         if close {
-            open = false;
+            self.right_open = false;
         }
-        self.settings_open = open;
         if s != self.library.settings {
             // An answer about the old address says nothing about the new one.
             let moved = s.base_url.trim() != self.library.settings.base_url.trim()
@@ -324,9 +362,6 @@ impl FolioApp {
             }
             self.mark_dirty();
         }
-        if self.library.show_summary != show_summary_before {
-            self.mark_dirty();
-        }
         if do_test {
             self.start_test();
         }
@@ -334,11 +369,11 @@ impl FolioApp {
             self.start_model_fetch();
         }
         if do_export {
-            self.settings_open = false;
             self.open_export();
+            self.open_tab(Tab::Export);
         }
         if do_prompts {
-            self.prompts_open = true;
+            self.open_tab(Tab::Prompts);
         }
         if do_save {
             self.save_now();

@@ -180,11 +180,7 @@ fn decode_utf16(bytes: &[u8]) -> String {
 /// Registry names look like "Georgia (TrueType)" or "Arial Bold (TrueType)".
 #[cfg(windows)]
 fn clean_name(raw: &str) -> String {
-    raw.split(" (")
-        .next()
-        .unwrap_or(raw)
-        .trim()
-        .to_string()
+    raw.split(" (").next().unwrap_or(raw).trim().to_string()
 }
 
 /// A font value is either an absolute path or a file name inside a font
@@ -256,10 +252,7 @@ mod tests {
     #[test]
     fn the_font_list_is_made_of_real_files() {
         let fonts = system_fonts();
-        assert!(
-            !fonts.is_empty(),
-            "the system must offer at least one font"
-        );
+        assert!(!fonts.is_empty(), "the system must offer at least one font");
         assert!(
             fonts.iter().all(|font| font.path.exists()),
             "every listed font must exist on disk"

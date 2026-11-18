@@ -207,7 +207,7 @@ fn a_cut_stream_is_continued_without_repeating_the_seam() {
 
     let requests = worker.join().expect("mock server finished");
     assert_eq!(requests.len(), 2, "the cut stream must be continued once");
-    assert_eq!(requests[0]["max_tokens"], 380);
+    assert_eq!(requests[0]["max_tokens"], 280);
     let messages = requests[1]["messages"].as_array().expect("messages");
     let last = messages.last().expect("last message");
     assert!(

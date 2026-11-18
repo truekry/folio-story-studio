@@ -111,7 +111,7 @@ impl FolioApp {
                 let mut font_changed = false;
                 let mut want_proofread = false;
                 let system_fonts = &self.system_fonts;
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.label(caps("Type", C::muted()));
                     let selected = if font_path.is_empty() {
                         "System default".to_string()
@@ -128,35 +128,47 @@ impl FolioApp {
                             })
                             .unwrap_or_else(|| "System default".to_string())
                     };
-                    egui::ComboBox::from_id_salt("writing-font")
-                        .selected_text(RichText::new(selected).size(11.0))
-                        .width(210.0)
-                        .show_ui(ui, |ui| {
-                            ScrollArea::vertical()
-                                .id_salt("writing-fonts")
-                                .max_height(300.0)
-                                .show(ui, |ui| {
-                                    if ui
-                                        .selectable_label(font_path.is_empty(), "System default")
-                                        .clicked()
-                                    {
-                                        font_path.clear();
-                                        font_changed = true;
-                                        ui.close();
-                                    }
-                                    for font in system_fonts {
-                                        let path = font.path.display().to_string();
+                    // White and Corpo set prose in their own sans face, so a
+                    // chosen writing font cannot show. Say so instead of
+                    // letting the picker do nothing.
+                    let paper_look = theme::look() == crate::theme::Look::Paper;
+                    ui.add_enabled_ui(paper_look, |ui| {
+                        egui::ComboBox::from_id_salt("writing-font")
+                            .selected_text(RichText::new(selected).size(11.0))
+                            .width(210.0)
+                            .show_ui(ui, |ui| {
+                                ScrollArea::vertical()
+                                    .id_salt("writing-fonts")
+                                    .max_height(300.0)
+                                    .show(ui, |ui| {
                                         if ui
-                                            .selectable_label(font_path == path, &font.name)
+                                            .selectable_label(font_path.is_empty(), "System default")
                                             .clicked()
                                         {
-                                            font_path = path;
+                                            font_path.clear();
                                             font_changed = true;
                                             ui.close();
                                         }
-                                    }
-                                });
-                        });
+                                        for font in system_fonts {
+                                            let path = font.path.display().to_string();
+                                            if ui
+                                                .selectable_label(font_path == path, &font.name)
+                                                .clicked()
+                                            {
+                                                font_path = path;
+                                                font_changed = true;
+                                                ui.close();
+                                            }
+                                        }
+                                    });
+                            });
+                    });
+                    if !paper_look {
+                        ui.label(RichText::new("Paper look only").size(9.0).color(C::muted()))
+                            .on_hover_text(
+                                "White and Corpo set the prose in their own sans face. Choose Paper in Settings to use a writing font.",
+                            );
+                    }
                     let size = ui.add(
                         egui::DragValue::new(&mut font_size)
                             .range(10.0..=40.0)
@@ -179,7 +191,7 @@ impl FolioApp {
                     )
                     .fill(C::soft())
                     .stroke(Stroke::new(1.0_f32, C::line()))
-                    .corner_radius(8)
+                    .corner_radius(theme::radius(8))
                     .min_size(Vec2::new(0.0, 24.0));
                     if ui
                         .add_enabled(!busy, check)
@@ -194,23 +206,40 @@ impl FolioApp {
                 ui.add_space(4.0);
 
                 ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new(format!(
-                            "{}   /   CHAPTER {} OF {}",
-                            story_title.to_uppercase(),
-                            self.active_chapter + 1,
-                            story.chapters.len()
-                        ))
-                        .size(9.5)
-                        .strong()
-                        .color(C::muted()),
+                    let left = format!(
+                        "{}   /   CHAPTER {} OF {}",
+                        story_title.to_uppercase(),
+                        self.active_chapter + 1,
+                        story.chapters.len()
+                    );
+                    let right = format!("{words} words  ·  {} min read", (words / 230).max(1));
+                    // The word count keeps its room; a long story title is cut
+                    // at the last word that fits instead of running under it.
+                    let right_width = ui.fonts(|fonts| {
+                        fonts
+                            .layout_no_wrap(
+                                right.clone(),
+                                FontId::proportional(10.5),
+                                C::muted(),
+                            )
+                            .size()
+                            .x
+                    });
+                    let room = (ui.available_width() - right_width - 8.0).max(48.0);
+                    ui.allocate_ui_with_layout(
+                        Vec2::new(room, 14.0),
+                        Layout::left_to_right(Align::Center),
+                        |ui| {
+                            ui.add(
+                                Label::new(
+                                    RichText::new(left).size(9.5).strong().color(C::muted()),
+                                )
+                                .truncate(),
+                            );
+                        },
                     );
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        ui.label(
-                            RichText::new(format!("{words} words  ·  {} min read", (words / 230).max(1)))
-                                .size(10.5)
-                                .color(C::muted()),
-                        );
+                        ui.label(RichText::new(right).size(10.5).color(C::muted()));
                     });
                 });
                 ui.add_space(5.0);
@@ -226,36 +255,14 @@ impl FolioApp {
                 let _ = title_response;
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
-                    let dot = if chapter.is_summarized() {
-                        if chapter.summary_is_stale() {
-                            C::amber()
-                        } else {
-                            C::green()
-                        }
-                    } else {
-                        C::muted()
-                    };
-                    if self.library.show_summary {
-                        if summary_button(ui, dot, chapter.summary_state()).clicked() {
-                            self.summary_open = true;
-                        }
-                        if !chapter.is_summarized() {
-                            ui.label(
-                                RichText::new("not summarized")
-                                    .size(10.0)
-                                    .color(C::muted()),
-                            );
-                        } else if chapter.summary_is_stale() {
-                            ui.label(RichText::new("needs refresh").size(10.0).color(C::amber()));
-                        }
-                    } else {
-                        let (rect, _) = ui.allocate_exact_size(Vec2::splat(6.0), Sense::hover());
-                        ui.painter().circle_filled(rect.center(), 2.6, dot);
-                        ui.label(
-                            RichText::new(chapter.summary_state())
-                                .size(10.0)
-                                .color(C::muted()),
-                        );
+                    let summarized = chapter.is_summarized();
+                    let stale = chapter.summary_is_stale();
+                    let partial = chapter.is_partial_summary();
+                    let (dot, label) = summary_lamp(summarized, stale, partial);
+                    let (rect, _) = ui.allocate_exact_size(Vec2::splat(6.0), Sense::hover());
+                    ui.painter().circle_filled(rect.center(), 2.6, dot);
+                    if !label.is_empty() {
+                        ui.label(RichText::new(label).size(10.0).color(C::muted()));
                     }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if self.job.is_some() {
@@ -320,7 +327,7 @@ impl FolioApp {
                 let editor_id = Id::new(("chapter-body", chapter_id.clone()));
                 // While Find is open, matching words in this chapter carry a
                 // background colour; the current one is stronger.
-                let find_query = if self.find_open {
+                let find_query = if self.showing(Tab::Find) {
                     self.find_query.trim().to_string()
                 } else {
                     String::new()
@@ -460,16 +467,19 @@ impl FolioApp {
                             );
                         }
                     });
-                // Follow the growing draft only while the author is at the
-                // bottom; scrolling up turns the following off.
+                // Follow the growing draft until the author scrolls up. A fresh
+                // draft keeps asking to scroll until the request has landed, so
+                // a long chapter cannot leave it cut off at the bottom.
                 if draft_shown.is_some() {
                     let at_bottom = scroll_out.state.offset.y + scroll_out.inner_rect.height()
                         >= scroll_out.content_size.y - 16.0;
-                    if user_scrolled || at_bottom {
+                    if user_scrolled {
                         self.draft_follow = at_bottom;
                     }
+                    if self.draft_reveal && (at_bottom || user_scrolled) {
+                        self.draft_reveal = false;
+                    }
                 }
-                self.draft_reveal = false;
                 // Read the marked words before the edited body is written back.
                 let menu_passage = match menu_action {
                     Some(SelectionAction::Lore) => self
@@ -521,7 +531,7 @@ impl FolioApp {
                     } else {
                         Some(path)
                     };
-                    theme::use_writing_font(ui.ctx(), choice.as_deref());
+                    theme::install_fonts(ui.ctx(), choice.as_deref());
                     self.mark_dirty();
                 }
 

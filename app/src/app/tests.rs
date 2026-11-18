@@ -548,7 +548,40 @@ fn stepping_through_matches_wraps_around() {
     assert_eq!(step_find_hit(Some(1), 0, true), None);
 }
 
-/// A lore entry has to accept a right-click, or its context menu (edit, pin,
+/// The top-bar buttons behave like a radio group with an off switch: the same
+/// view again closes the panel, another view replaces it.
+#[test]
+fn a_panel_button_toggles_only_its_own_view() {
+    assert_eq!(
+        next_tab(true, Tab::Settings, Tab::Settings),
+        (false, Tab::Settings)
+    );
+    assert_eq!(
+        next_tab(true, Tab::Ai, Tab::Settings),
+        (true, Tab::Settings)
+    );
+    assert_eq!(next_tab(false, Tab::Find, Tab::Find), (true, Tab::Find));
+    // Asking for a view that is not open only ever opens it.
+    assert_eq!(
+        next_tab(false, Tab::Summary, Tab::Summary),
+        (true, Tab::Summary)
+    );
+}
+
+/// The lamp under the chapter title says exactly one thing per state, and
+/// green says nothing at all.
+#[test]
+fn the_chapter_lamp_speaks_three_states() {
+    assert_eq!(summary_lamp(false, false, false).1, "No summary");
+    assert_eq!(summary_lamp(false, true, false).1, "No summary");
+    assert_eq!(summary_lamp(true, true, false).1, "Outdated summary");
+    assert_eq!(summary_lamp(true, false, false).1, "");
+    // A partial summary is never sold as current.
+    assert_eq!(summary_lamp(true, false, true).1, "Partial summary");
+    assert_eq!(summary_lamp(true, true, true).1, "Partial summary");
+}
+
+/// A lore card has to accept a right-click, or its context menu (edit, pin,
 /// delete) can never open. Drawing it head-lessly and clicking with the
 /// secondary button is the only honest way to check that.
 #[test]
@@ -558,7 +591,7 @@ fn a_lore_card_answers_a_right_click() {
     let entry = crate::model::Library::sample().stories[0].lore[0].clone();
     let ctx = egui::Context::default();
     // The card draws in the app's serif family, which only `install` binds.
-    crate::theme::install(&ctx);
+    crate::theme::install(&ctx, crate::theme::Look::Paper, None);
     let mut response = None;
 
     let mut draw = |events: Vec<Event>| {
@@ -614,7 +647,7 @@ fn a_right_click_keeps_the_text_selection_and_opens_the_menu() {
     }
 
     let ctx = egui::Context::default();
-    crate::theme::install(&ctx);
+    crate::theme::install(&ctx, crate::theme::Look::Paper, None);
     let mut text = "The tide came back at dawn.".to_string();
     let id = Id::new("test-editor");
     let kept: RefCell<Option<Range<usize>>> = RefCell::new(None);
@@ -695,6 +728,164 @@ fn a_right_click_keeps_the_text_selection_and_opens_the_menu() {
             .is_some_and(|range| range.primary.index != range.secondary.index),
         "the highlight must still be visible"
     );
+}
+
+#[test]
+fn a_rewrite_that_only_repeats_the_passage_is_recognised() {
+    let source = "The sea was very beautiful, and the light on it was gold.";
+    assert_eq!(echo_similarity(source, source), 1.0);
+    assert!(
+        echo_similarity(
+            "the sea was very beautiful and the light on it was gold",
+            source
+        ) > 0.95,
+        "case and punctuation do not make a rewrite"
+    );
+    assert!(
+        echo_similarity(
+            "Gold light lay across the water; the sea itself was lovely.",
+            source
+        ) < 0.5,
+        "a real rewrite keeps some nouns, not the wording"
+    );
+    assert_eq!(echo_similarity("", ""), 0.0);
+}
+
+#[test]
+fn proofreading_changes_only_the_corrected_spans() {
+    let body = "Mira sat down.\n\nShe begun to drew it again.\n\nShe did not made it beautiful.";
+    let ranges = paragraph_ranges(body);
+    assert_eq!(ranges.len(), 3);
+    let second = slice_chars(body, &ranges[1]).to_string();
+    let third = slice_chars(body, &ranges[2]).to_string();
+    let corrections = vec![
+        (ranges[1].clone(), "She began to draw it again.".to_string()),
+        (
+            ranges[2].clone(),
+            "She did not make it beautiful.".to_string(),
+        ),
+    ];
+    let fixed = apply_corrections(body, &corrections);
+    assert!(fixed.contains("She began to draw it again."));
+    assert!(fixed.contains("She did not make it beautiful."));
+    assert!(!fixed.contains("begun"));
+    assert!(!fixed.contains("did not made"));
+    // Everything outside the two paragraphs is byte-identical.
+    assert!(fixed.starts_with("Mira sat down.\n\n"));
+    assert_eq!(
+        fixed,
+        "Mira sat down.\n\nShe began to draw it again.\n\nShe did not make it beautiful."
+    );
+    assert_ne!(second, "She began to draw it again.");
+    assert_ne!(third, "She did not make it beautiful.");
+
+    // A stale range is clamped, not fatal.
+    let clamped = apply_corrections("short", &[(3..99, "er".to_string())]);
+    assert_eq!(clamped, "shoer");
+}
+
+#[test]
+fn an_elaborate_draft_uses_the_marked_paragraph_not_the_last_one() {
+    let body = "Opening line.\n\nThis middle paragraph is the one marked.\n\nClosing line.";
+    let ranges = paragraph_ranges(body);
+    let marked = ranges[1].clone();
+    let source = slice_chars(body, &marked).to_string();
+    let draft = prose_draft(
+        "elaborate",
+        "This middle paragraph is the one marked, now with more weather and a chair.",
+        body,
+        Some(marked),
+        Some(source),
+    );
+    let result = apply_draft(&draft, body).expect("apply the elaboration");
+    assert!(result.starts_with("Opening line.\n\nThis middle paragraph"));
+    assert!(result.ends_with("\n\nClosing line."));
+    assert_eq!(result.matches("Closing line.").count(), 1);
+}
+
+#[test]
+fn the_side_panel_never_squeezes_the_editor_away() {
+    // At the smallest window a full-width panel would leave no page at all.
+    let (min, max) = desk_width_range(1040.0);
+    assert_eq!(min, 320.0);
+    assert!(max <= 360.0, "1040 px leaves about 354 px: {max}");
+    assert!(max >= 320.0);
+    assert_eq!(
+        LIBRARY_WIDTH + max + 420.0,
+        1040.0,
+        "the editor keeps its 420 px column"
+    );
+
+    // A wide window allows the full 640 px the panel was designed for.
+    assert_eq!(desk_width_range(1440.0), (320.0, 640.0));
+    assert_eq!(desk_width_range(2560.0), (320.0, 640.0));
+
+    // A window below the design minimum still offers a usable panel.
+    let (min, max) = desk_width_range(900.0);
+    assert_eq!(min, 320.0);
+    assert_eq!(max, 320.0);
+}
+
+/// The full proofread of chapter 3 against a real endpoint. The two seeded
+/// mistakes must be fixed and no name may be invented; a handful of other
+/// small fixes is allowed, a rewrite is not.
+#[test]
+#[ignore = "needs FOLIO_LAN_URL"]
+fn the_lan_proofread_of_chapter_three_changes_only_the_seeded_errors() {
+    let Ok(base_url) = std::env::var("FOLIO_LAN_URL") else {
+        panic!("set FOLIO_LAN_URL to an OpenAI-compatible endpoint");
+    };
+    let settings = AiSettings {
+        base_url,
+        api_key: std::env::var("FOLIO_LAN_API_KEY").unwrap_or_default(),
+        model: std::env::var("FOLIO_LAN_MODEL").unwrap_or_default(),
+        ..Default::default()
+    };
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/bench_chapter_3.txt");
+    let Ok(body) = std::fs::read_to_string(&path) else {
+        eprintln!("skipped: local fixture tests/bench_chapter_3.txt is not in the repo");
+        return;
+    };
+    let ranges = paragraph_ranges(&body);
+    assert!(ranges.len() > 30, "the fixture is one long chapter");
+    let cancel = AtomicBool::new(false);
+    let started = Instant::now();
+    let mut corrections = Vec::new();
+    for range in &ranges {
+        let original = slice_chars(&body, range).to_string();
+        let corrected = ai::proofread_paragraph(&settings, &original, &cancel).expect("proofread");
+        let corrected = corrected.trim().to_string();
+        if !corrected.is_empty() && corrected != original {
+            corrections.push((range.clone(), corrected));
+        }
+    }
+    println!(
+        "{} of {} paragraphs changed in {:.1}s",
+        corrections.len(),
+        ranges.len(),
+        started.elapsed().as_secs_f32()
+    );
+    for (_, text) in &corrections {
+        println!("CHANGED: {text}");
+    }
+    let fixed = apply_corrections(&body, &corrections);
+    assert!(!fixed.contains("begun, slowly and carefully, to drew"));
+    assert!(!fixed.contains("did not made"));
+    assert!(
+        fixed.contains("began, slowly and carefully, to draw"),
+        "the first seeded mistake was not corrected"
+    );
+    assert!(
+        corrections.len() <= 5,
+        "the proofread must stay a correction, not a rewrite: {} paragraphs changed",
+        corrections.len()
+    );
+    for invented in ["software office", "Cary", "amaryllis", "cutout"] {
+        assert!(
+            !fixed.contains(invented),
+            "the proofreader invented “{invented}”"
+        );
+    }
 }
 
 #[test]

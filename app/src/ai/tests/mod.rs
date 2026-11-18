@@ -22,6 +22,7 @@ mod prompt;
 mod reply;
 mod stream;
 mod summarize;
+mod tuning;
 
 /// The non-streaming shape used by most tests: collect the whole reply and
 /// ignore the deltas.

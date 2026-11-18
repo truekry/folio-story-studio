@@ -95,13 +95,14 @@ impl FolioApp {
             self.start_next_summary();
             return;
         }
+        let block_size = ai::summary_block_size(&self.library.settings);
         let Some((source, base_len, base_hash, blocks)) = self
             .library
             .story(&story_id)
             .and_then(|story| story.chapter(&chapter_id))
             .map(|chapter| {
                 let source = chapter.body.clone();
-                let blocks = ai::summary_blocks(&source, ai::SUMMARY_BLOCK_WORDS);
+                let blocks = ai::summary_blocks(&source, block_size);
                 let base_len = source.chars().count();
                 let base_hash = crate::model::content_hash(&source);
                 (source, base_len, base_hash, blocks)
@@ -163,14 +164,11 @@ impl FolioApp {
             (SummaryStep::Block(run.next), prompt, words, 0.3_f32)
         } else if run.blocks.len() > 1 {
             // Every block is done. Only now are the independent parts joined:
-            // the merge prompt reads the whole combined text and rewrites it.
+            // the merge prompt reads the whole combined text and rewrites it
+            // to the author's whole-chapter target.
             let combined = run.parts.join("\n\n");
-            let prompt = ai::summary_merge_prompt(&combined);
-            let words = run
-                .parts
-                .iter()
-                .map(|part| part.split_whitespace().count())
-                .sum::<usize>() as u32;
+            let words = ai::summary_merge_words(&self.library.settings);
+            let prompt = ai::summary_merge_prompt(&combined, words);
             (SummaryStep::Merge, prompt, words, 0.2_f32)
         } else {
             // A one-block chapter is already one text; there is nothing to
@@ -178,7 +176,7 @@ impl FolioApp {
             let summary = run.parts.first().cloned().unwrap_or_default();
             let (base_len, base_hash) = (run.base_len, run.base_hash);
             self.summary_run = None;
-            self.store_chapter_summary(story_id, chapter_id, summary, base_len, base_hash);
+            self.store_chapter_summary(story_id, chapter_id, summary, base_len, base_hash, "ai");
             self.start_next_summary();
             return;
         };
@@ -222,6 +220,13 @@ impl FolioApp {
             self.summary_failed(step, "The summary reply had no text.".to_string());
             return;
         }
+        // A model that ignores "at most N words" does not get to turn a short
+        // memory into a retelling. The cut is made at a finished sentence.
+        let target = match step {
+            SummaryStep::Block(_) => ai::summary_block_words(&self.library.settings),
+            SummaryStep::Merge => ai::summary_merge_words(&self.library.settings),
+        };
+        let (summary, _trimmed) = ai::trim_to_target(&summary, target);
         let (next, total, base_len, base_hash) = {
             let run = self.summary_run.as_ref().expect("checked above");
             (run.next, run.blocks.len(), run.base_len, run.base_hash)
@@ -246,7 +251,9 @@ impl FolioApp {
                         )
                     };
                     self.summary_run = None;
-                    self.store_chapter_summary(story_id, chapter_id, summary, base_len, base_hash);
+                    self.store_chapter_summary(
+                        story_id, chapter_id, summary, base_len, base_hash, "ai",
+                    );
                     self.start_next_summary();
                 } else {
                     // The next step is the following block or, after the last
@@ -256,7 +263,9 @@ impl FolioApp {
             }
             SummaryStep::Merge => {
                 self.summary_run = None;
-                self.store_chapter_summary(story_id, chapter_id, summary, base_len, base_hash);
+                self.store_chapter_summary(
+                    story_id, chapter_id, summary, base_len, base_hash, "ai",
+                );
                 self.start_next_summary();
             }
             _ => {}
@@ -287,7 +296,7 @@ impl FolioApp {
         );
         self.summary_run = None;
         if step == SummaryStep::Merge && !combined.trim().is_empty() {
-            self.store_chapter_summary(story_id, chapter_id, combined, base_len, base_hash);
+            self.store_chapter_summary(story_id, chapter_id, combined, base_len, base_hash, "ai");
             self.notify(
                 format!(
                     "The final merge failed, so the combined block summary was saved. ({error})"
@@ -316,6 +325,7 @@ impl FolioApp {
         text: String,
         base_len: usize,
         base_hash: u64,
+        source: &str,
     ) {
         let (summary, cut) = ai::complete_summary(&text);
         if summary.trim().is_empty() {
@@ -328,7 +338,7 @@ impl FolioApp {
             .and_then(|story| story.chapter_mut(&chapter_id))
         {
             chapter.summary = summary;
-            chapter.summary_source = "ai".to_string();
+            chapter.summary_source = source.to_string();
             chapter.summary_body_len = base_len;
             chapter.summary_body_hash = base_hash;
             self.mark_dirty();
@@ -440,12 +450,15 @@ impl FolioApp {
         Some(text)
     }
 
-    /// Stop the whole summary run now. The running request is cancelled, the
-    /// block parts in flight are dropped, and the old chapter summary stays.
+    /// Stop the whole summary run now. Whatever blocks are already finished
+    /// are paid for, so they are saved as one text with the honest source
+    /// "partial" rather than thrown away. When no block finished, the old
+    /// summary stays and the notice says so.
     pub(crate) fn stop_summary_batch(&mut self) {
+        crate::crash::note("stop summary batch");
         self.summary_queue.clear();
         self.summary_batch = None;
-        self.summary_run = None;
+        let run = self.summary_run.take();
         if self
             .job
             .as_ref()
@@ -454,8 +467,27 @@ impl FolioApp {
             // Dropping the job sets the worker's cancel flag.
             self.job = None;
         }
+        let mut saved = false;
+        if let Some(run) = run {
+            let combined = run.parts.join("\n\n");
+            if !combined.trim().is_empty() {
+                self.store_chapter_summary(
+                    run.story_id,
+                    run.chapter_id,
+                    combined,
+                    run.base_len,
+                    run.base_hash,
+                    "partial",
+                );
+                saved = true;
+            }
+        }
         self.notify(
-            "Summarizing stopped — the summaries that were already written are kept.",
+            if saved {
+                "Summarizing stopped — the finished blocks were saved as a partial summary."
+            } else {
+                "Summarizing stopped — no block was finished, so the old summary stays."
+            },
             false,
         );
     }
@@ -463,18 +495,18 @@ impl FolioApp {
     /// The chapter summary in its own window, following the prompts window:
     /// a fixed page with a Done strip that never scrolls away and a body that
     /// scrolls once the summary outgrows it. The editor reserves no room.
-    pub(crate) fn summary_window(&mut self, ctx: &egui::Context) {
-        if !self.summary_open {
-            return;
-        }
+    /// The chapter summary as a view of the side panel. The live block, the
+    /// block progress and Stop follow a running summary even while the panel
+    /// is closed; only the visibility changes.
+    pub(crate) fn ui_summary(&mut self, ui: &mut Ui) {
         let story_index = self.active_story;
         let chapter_index = self.active_chapter;
         let Some(story) = self.library.stories.get(story_index) else {
-            self.summary_open = false;
+            self.right_open = false;
             return;
         };
         let Some(chapter) = story.chapters.get(chapter_index) else {
-            self.summary_open = false;
+            self.right_open = false;
             return;
         };
         let story_id = story.key.clone();
@@ -510,63 +542,56 @@ impl FolioApp {
         // The live summary, when this chapter is being written right now. Read
         // from the run, so opening the window mid-run shows the text so far.
         let live = self.summary_live_text(story_id, chapter_id);
-        let mut open = self.summary_open;
         let mut close = false;
         let mut do_summary = false;
         let mut do_older = false;
         let mut do_copy = false;
         let mut do_stop = false;
 
-        Window::new("Chapter summary")
-            .id(Id::new("summary-window"))
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(true)
-            .default_size(Vec2::new(720.0, 560.0))
-            .min_size(Vec2::new(560.0, 380.0))
-            .show(ctx, |ui| {
-                TopBottomPanel::bottom(Id::new("summary-footer"))
-                    .frame(Frame::NONE)
-                    .show_inside(ui, |ui| {
-                        ui.add_space(6.0);
-                        ui.separator();
-                        ui.add_space(2.0);
-                        ui.horizontal(|ui| {
-                            if primary(ui, "Done").clicked() {
-                                close = true;
-                            }
-                            ui.label(
-                                RichText::new(
-                                    "The summary is what the AI remembers of this chapter.",
-                                )
-                                .size(9.5)
-                                .color(C::muted()),
-                            );
-                        });
-                    });
-                CentralPanel::default()
+        // The footer keeps "Done" reachable while the summary scrolls.
+        TopBottomPanel::bottom(Id::new("summary-footer"))
+            .frame(Frame::NONE)
+            .show_inside(ui, |ui| {
+                ui.add_space(6.0);
+                ui.separator();
+                ui.add_space(2.0);
+                ui.horizontal(|ui| {
+                    if primary(ui, "Done").clicked() {
+                        close = true;
+                    }
+                    ui.label(
+                        RichText::new("The summary is what the AI remembers of this chapter.")
+                            .size(9.5)
+                            .color(C::muted()),
+                    );
+                });
+            });
+        CentralPanel::default()
                     .frame(Frame::NONE)
                     .show_inside(ui, |ui| {
                         ScrollArea::vertical()
                             .id_salt("summary-scroll")
                             .auto_shrink([false, false])
                             .show(ui, |ui| {
-                                ui.horizontal(|ui| {
-                                    let dot = if has_summary {
-                                        if stale {
-                                            C::amber()
-                                        } else {
-                                            C::green()
-                                        }
-                                    } else {
+                                ui.horizontal_wrapped(|ui| {
+                                    let partial = chapter.is_partial_summary();
+                                    let dot = if !has_summary {
                                         C::muted()
+                                    } else if stale || partial {
+                                        C::amber()
+                                    } else {
+                                        C::green()
                                     };
                                     let (rect, _) =
                                         ui.allocate_exact_size(Vec2::splat(6.0), Sense::hover());
                                     ui.painter().circle_filled(rect.center(), 2.6, dot);
-                                    ui.label(caps(&chapter_title, C::muted()));
+                                    ui.add(
+                                        Label::new(caps(&chapter_title, C::muted())).truncate(),
+                                    );
                                     if !has_summary {
                                         pill(ui, "Not summarized", C::amber(), C::amber_soft());
+                                    } else if partial {
+                                        pill(ui, "Partial summary", C::amber(), C::amber_soft());
                                     } else if stale {
                                         pill(ui, "Needs refresh", C::amber(), C::amber_soft());
                                     } else {
@@ -577,6 +602,7 @@ impl FolioApp {
                                             "ai" => "AI written",
                                             "local" => "Quick offline",
                                             "manual" => "Edited by you",
+                                            "partial" => "Finished blocks only",
                                             _ => "Saved",
                                         };
                                         ui.label(
@@ -609,7 +635,7 @@ impl FolioApp {
                                     Frame::NONE
                                         .fill(C::summary_bg())
                                         .stroke(Stroke::new(1.0_f32, C::line()))
-                                        .corner_radius(10)
+                                        .corner_radius(theme::radius(10))
                                         .inner_margin(Margin::symmetric(12, 9))
                                         .show(ui, |ui| {
                                             ui.set_width(ui.available_width());
@@ -673,7 +699,7 @@ impl FolioApp {
                                         )
                                         .fill(C::accent_soft())
                                         .stroke(Stroke::new(1.0_f32, C::accent_soft()))
-                                        .corner_radius(8)
+                                        .corner_radius(theme::radius(8))
                                         .min_size(Vec2::new(86.0, 28.0));
                                         if ui
                                             .add(stop)
@@ -698,7 +724,7 @@ impl FolioApp {
                                         )
                                         .fill(C::accent())
                                         .stroke(Stroke::NONE)
-                                        .corner_radius(8)
+                                        .corner_radius(theme::radius(8))
                                         .min_size(Vec2::new(86.0, 28.0));
                                         if ui
                                             .add_enabled(!busy, button)
@@ -762,12 +788,10 @@ impl FolioApp {
                                 }
                             });
                     });
-            });
 
         if close {
-            open = false;
+            self.right_open = false;
         }
-        self.summary_open = open;
         let copy_summary = summary.clone();
         if summary != original_summary {
             if let Some(chapter) = self
@@ -785,7 +809,7 @@ impl FolioApp {
         }
         if do_copy {
             // Copy what is on screen, including edits made since it opened.
-            ctx.copy_text(copy_summary);
+            ui.ctx().copy_text(copy_summary);
             self.notify("Summary copied.", false);
         }
         if do_summary {

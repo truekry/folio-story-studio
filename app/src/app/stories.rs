@@ -150,7 +150,7 @@ impl FolioApp {
             .map(|s| s.open_chapter.min(s.chapters.len().saturating_sub(1)))
             .unwrap_or(0);
         self.library.active_story = self.active_story;
-        self.summary_open = false;
+        self.close_tab(Tab::Summary);
         self.editor_selection = None;
         self.confirm = None;
         self.mark_dirty();
@@ -226,7 +226,7 @@ impl FolioApp {
         if self.story_id() == story_id {
             self.active_chapter = open_chapter;
         }
-        self.summary_open = false;
+        self.close_tab(Tab::Summary);
         self.editor_selection = None;
         self.confirm = None;
         self.mark_dirty();
@@ -286,8 +286,9 @@ impl FolioApp {
             clear_chapter_chat(chapter);
         }
         self.confirm = None;
+        self.clear_assistant();
         self.mark_dirty();
-        self.notify("Chat cleared.", false);
+        self.notify("Conversation cleared.", false);
     }
 
     pub(crate) fn restore_trash(&mut self, trash_id: u64) {
@@ -316,7 +317,7 @@ impl FolioApp {
                     .len()
                     .saturating_sub(1)
                     .min(open_chapter);
-                self.summary_open = false;
+                self.close_tab(Tab::Summary);
                 self.editor_selection = None;
                 self.mark_dirty();
                 self.notify(format!("Story “{title}” put back."), false);
@@ -334,7 +335,7 @@ impl FolioApp {
                     if self.story_id() == story_id {
                         self.active_chapter = at;
                     }
-                    self.summary_open = false;
+                    self.close_tab(Tab::Summary);
                     self.editor_selection = None;
                     self.mark_dirty();
                     self.notify(format!("Chapter “{title}” put back."), false);
@@ -375,6 +376,7 @@ impl FolioApp {
             triggers: entry.map(|e| e.triggers.clone()).unwrap_or_default(),
             description: entry.map(|e| e.description.clone()).unwrap_or_default(),
             pinned: entry.map(|e| e.pinned).unwrap_or(false),
+            invented: entry.map(|e| e.invented).unwrap_or(false),
         });
     }
 
@@ -425,7 +427,7 @@ impl FolioApp {
         self.new_story_open = false;
         self.new_story_title.clear();
         self.new_story_premise.clear();
-        self.summary_open = false;
+        self.close_tab(Tab::Summary);
         self.mark_dirty();
         self.notify("New story created. The first chapter is waiting.", false);
     }
@@ -465,7 +467,7 @@ impl FolioApp {
         }
         self.new_chapter_open = false;
         self.new_chapter_title.clear();
-        self.summary_open = false;
+        self.close_tab(Tab::Summary);
         self.mark_dirty();
     }
 }

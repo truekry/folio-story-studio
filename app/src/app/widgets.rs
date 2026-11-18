@@ -2,6 +2,27 @@
 
 use super::*;
 
+/// The left rail is fixed at this width. The side panel's maximum width is
+/// derived from it, so the editor keeps a readable column at the smallest
+/// window instead of being squeezed under the panel.
+pub(crate) const LIBRARY_WIDTH: f32 = 266.0;
+/// The narrowest the side panel may get. Below this, its sliders and fields
+/// would be cut off; the settings say so when they are outgrown.
+pub(crate) const DESK_MIN_WIDTH: f32 = 320.0;
+/// The widest the side panel may get when the window has room.
+pub(crate) const DESK_MAX_WIDTH: f32 = 640.0;
+/// The column the chapter needs before the side panel may grow further.
+pub(crate) const MIN_EDITOR_WIDTH: f32 = 420.0;
+
+/// The width range of the right side panel for a given window width. At
+/// 1040 px this leaves about 354 px, instead of painting the editor under a
+/// 640 px panel.
+pub(crate) fn desk_width_range(screen_width: f32) -> (f32, f32) {
+    let room = (screen_width - LIBRARY_WIDTH - MIN_EDITOR_WIDTH).max(DESK_MIN_WIDTH);
+    let max = room.min(DESK_MAX_WIDTH);
+    (DESK_MIN_WIDTH.min(max), max)
+}
+
 /// The width a notice may use. A notice that grows with its text can become
 /// wider than the window, and one whose wrapping label has no fixed width can
 /// collapse into a narrow column. This keeps both ends in check.
@@ -19,17 +40,251 @@ pub(crate) fn confirm_width(screen_width: f32) -> f32 {
 
 /// One card in the prompt editor: the function's name, the length it aims for,
 /// and the instruction itself.
+/// The prompt layout: twelve equally sized blocks in reading order. Drag one
+/// onto another to move it; Reset restores the standard order.
+pub(crate) fn prompt_layout_card(ui: &mut Ui, saved: &mut Vec<String>) -> bool {
+    let mut blocks = ai::normalized_order(saved);
+    let mut changed = false;
+    let mut drop: Option<(ai::PromptBlock, ai::PromptBlock)> = None;
+    let mut hovered_block: Option<ai::PromptBlock> = None;
+    Frame::NONE
+        .fill(C::card())
+        .stroke(Stroke::new(1.0_f32, C::line()))
+        .corner_radius(theme::radius(10))
+        .inner_margin(Margin::symmetric(12, 10))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(caps("PROMPT LAYOUT", C::accent_deep()));
+            ui.label(
+                RichText::new(
+                    "Read top-left to bottom-right. Drag a block onto another to move it. Blocks that do not apply are skipped; the assistant rules are always appended in the chat.",
+                )
+                .size(9.5)
+                .color(C::muted()),
+            );
+            ui.add_space(5.0);
+            let gap = ui.spacing().item_spacing.x;
+            let available = ui.available_width();
+            let columns = ((available / 150.0).floor() as usize).clamp(1, 4);
+            let cell_w = ((available - gap * columns.saturating_sub(1) as f32) / columns as f32)
+                .max(110.0);
+            let cell_h: f32 = 34.0;
+            let mut index = 0;
+            while index < blocks.len() {
+                ui.horizontal(|ui| {
+                    for _ in 0..columns {
+                        if index >= blocks.len() {
+                            break;
+                        }
+                        let block = blocks[index];
+                        let id = Id::new(("prompt-block", block.name()));
+                        let (cell, dropped) = ui.dnd_drop_zone::<ai::PromptBlock, _>(
+                            Frame::NONE.corner_radius(theme::radius(8)),
+                            |ui| {
+                                ui.dnd_drag_source(id, block, |ui| {
+                                    Frame::NONE
+                                        .fill(C::soft())
+                                        .stroke(Stroke::new(1.0_f32, C::line()))
+                                        .corner_radius(theme::radius(8))
+                                        .inner_margin(Margin::symmetric(8, 6))
+                                        .show(ui, |ui| {
+                                            ui.set_width((cell_w - 18.0).max(60.0));
+                                            ui.set_height((cell_h - 12.0).max(16.0));
+                                            ui.horizontal(|ui| {
+                                                ui.label(
+                                                    RichText::new("≡")
+                                                        .size(11.0)
+                                                        .color(C::muted()),
+                                                );
+                                                ui.add(
+                                                    Label::new(
+                                                        RichText::new(format!(
+                                                            "{}. {}",
+                                                            index + 1,
+                                                            block.label()
+                                                        ))
+                                                        .size(10.0)
+                                                        .color(C::ink()),
+                                                    )
+                                                    .truncate(),
+                                                );
+                                            });
+                                        });
+                                })
+                                .response
+                            },
+                        );
+                        // Remember the block under the pointer; its explanation
+                        // is shown in the fixed line under the grid.
+                        let chip = cell.inner;
+                        if ui.rect_contains_pointer(chip.rect)
+                            && !ui.ctx().is_being_dragged(id)
+                        {
+                            hovered_block = Some(block);
+                        }
+                        if let Some(dragged) = dropped {
+                            drop = Some((*dragged, block));
+                        }
+                        index += 1;
+                    }
+                });
+            }
+            ui.add_space(6.0);
+            // A fixed line instead of a tooltip: it cannot flicker or vanish.
+            let hint = match hovered_block {
+                Some(block) => format!("{} — {}", block.label(), block.hint()),
+                None => {
+                    "Hover a block to see what it contains. Drag a block onto another to move it."
+                        .to_string()
+                }
+            };
+            Frame::NONE
+                .fill(C::summary_bg())
+                .corner_radius(theme::radius(8))
+                .inner_margin(Margin::symmetric(8, 6))
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.set_min_height(30.0);
+                    ui.add(
+                        Label::new(RichText::new(hint).size(9.5).color(C::muted())).wrap(),
+                    );
+                });
+            ui.add_space(4.0);
+            if ghost(ui, "Reset layout").clicked() {
+                saved.clear();
+                changed = true;
+            }
+        });
+    if let Some((dragged, target)) = drop {
+        if ai::move_block(&mut blocks, dragged, target) {
+            *saved = blocks
+                .iter()
+                .map(|block| block.name().to_string())
+                .collect();
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// A word target that is typed, never dragged. The buffer lives in egui's
+/// memory only while the field has focus, so a reset or a value change made
+/// elsewhere shows up as soon as the field is left.
+pub(crate) fn word_target(
+    ui: &mut Ui,
+    salt: &str,
+    value: &mut u32,
+    range: std::ops::RangeInclusive<u32>,
+    hint: &str,
+) -> bool {
+    let id = Id::new(("word-target", salt));
+    let text_id = id.with("text");
+    let mut text = if ui.memory(|memory| memory.has_focus(id)) {
+        ui.data_mut(|data| data.get_temp::<String>(text_id))
+            .unwrap_or_else(|| value.to_string())
+    } else {
+        value.to_string()
+    };
+    let response = ui
+        .add(
+            TextEdit::singleline(&mut text)
+                .id(id)
+                .font(FontId::monospace(11.5))
+                .horizontal_align(Align::RIGHT)
+                .desired_width(46.0),
+        )
+        .on_hover_text(hint);
+    let mut changed = false;
+    if response.changed() {
+        if let Ok(parsed) = text.trim().parse::<u32>() {
+            let clamped = parsed.clamp(*range.start(), *range.end());
+            if clamped != *value {
+                *value = clamped;
+                changed = true;
+            }
+        }
+    }
+    if response.has_focus() {
+        ui.data_mut(|data| data.insert_temp(text_id, text));
+    }
+    changed
+}
+
+/// The second summary target: the length of the one text the block summaries
+/// are merged into. Reset returns it to the built-in length.
+pub(crate) fn summary_merge_card(ui: &mut Ui, prompts: &mut PromptSettings) -> bool {
+    let mut changed = false;
+    let mut reset = false;
+    let mut words = prompts
+        .merge_words
+        .unwrap_or(ai::DEFAULT_SUMMARY_MERGE_WORDS);
+    Frame::NONE
+        .fill(C::card())
+        .stroke(Stroke::new(1.0_f32, C::line()))
+        .corner_radius(theme::radius(10))
+        .inner_margin(Margin::symmetric(12, 10))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    RichText::new("Chapter summary (whole chapter)")
+                        .size(12.5)
+                        .strong()
+                        .color(C::ink()),
+                );
+                if prompts.merge_words.is_some() {
+                    ui.label(RichText::new("edited").size(9.0).color(C::accent()));
+                }
+            });
+            ui.label(
+                RichText::new(
+                    "The block summaries are joined into one text at this length.",
+                )
+                .size(9.0)
+                .color(C::muted()),
+            );
+            ui.add_space(3.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new("aim for").size(9.5).color(C::muted()));
+                if word_target(
+                    ui,
+                    "summary-merge",
+                    &mut words,
+                    0..=1200,
+                    "How many words the merged chapter summary should aim for. No limit lets it use the room the endpoint leaves.",
+                ) {
+                    changed = true;
+                }
+                ui.label(
+                    RichText::new(if words == 0 { "— no limit" } else { "words" })
+                        .size(9.5)
+                        .color(C::muted()),
+                );
+                if prompts.merge_words.is_some() && ghost(ui, "Reset").clicked() {
+                    reset = true;
+                }
+            });
+        });
+    if reset {
+        prompts.merge_words = None;
+        changed = true;
+    } else if changed {
+        prompts.merge_words = Some(words);
+    }
+    changed
+}
+
 pub(crate) fn prompt_card(ui: &mut Ui, kind: ai::PromptKind, prompts: &mut PromptSettings) -> bool {
     let mut changed = false;
     Frame::NONE
         .fill(C::card())
         .stroke(Stroke::new(1.0_f32, C::line()))
-        .corner_radius(10)
+        .corner_radius(theme::radius(10))
         .inner_margin(Margin::symmetric(12, 10))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             let per_block = kind == ai::PromptKind::Summary;
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.label(
                     RichText::new(kind.label())
                         .size(12.5)
@@ -39,51 +294,40 @@ pub(crate) fn prompt_card(ui: &mut Ui, kind: ai::PromptKind, prompts: &mut Promp
                 if kind.is_edited(prompts) {
                     ui.label(RichText::new("edited").size(9.0).color(C::accent()));
                 }
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ghost(ui, "Reset").clicked() {
-                        let slot = kind.slot_mut(prompts);
-                        slot.text.clear();
-                        slot.words = None;
-                        changed = true;
-                    }
-                    let mut words = kind.words(prompts);
-                    let range = kind.words_range();
-                    if ui
-                        .add(
-                            egui::DragValue::new(&mut words)
-                                .range(range)
-                                .speed(5.0)
-                                .custom_formatter(|n, _| {
-                                    let n = n.round() as u32;
-                                    match n {
-                                        0 => "no limit".to_string(),
-                                        1 => "1 word".to_string(),
-                                        n => format!("{n} words"),
-                                    }
-                                }),
-                        )
-                        .on_hover_text(if per_block {
-                            "How many words each block summary should aim for. The final merged summary has no separate target; it keeps all facts from the blocks."
-                        } else {
-                            "How many words the answer should aim for. No limit means Folio asks for no particular length and lets the reply use the room the endpoint gives it."
-                        })
-                        .changed()
-                    {
-                        kind.slot_mut(prompts).words = Some(words);
-                        changed = true;
-                    }
-                    ui.label(
-                        RichText::new(if per_block { "per block" } else { "aim for" })
-                            .size(9.5)
-                            .color(C::muted()),
-                    );
-                });
+            });
+            ui.horizontal_wrapped(|ui| {
+                let mut words = kind.words(prompts);
+                ui.label(
+                    RichText::new(if per_block { "per block" } else { "aim for" })
+                        .size(9.5)
+                        .color(C::muted()),
+                );
+                let hint = if per_block {
+                    "How many words each block summary should aim for. The whole-chapter target below sets the length of the merged text."
+                } else {
+                    "How many words the answer should aim for. No limit means Folio asks for no particular length and lets the reply use the room the endpoint gives it."
+                };
+                if word_target(ui, kind.label(), &mut words, kind.words_range(), hint) {
+                    kind.slot_mut(prompts).words = Some(words);
+                    changed = true;
+                }
+                ui.label(
+                    RichText::new(if words == 0 { "— no limit" } else { "words" })
+                        .size(9.5)
+                        .color(C::muted()),
+                );
+                if ghost(ui, "Reset").clicked() {
+                    let slot = kind.slot_mut(prompts);
+                    slot.text.clear();
+                    slot.words = None;
+                    changed = true;
+                }
             });
             ui.add_space(3.0);
             if per_block {
                 ui.label(
                     RichText::new(
-                        "The chapter is summarized in blocks; this target applies to each block, not to the merged text.",
+                        "The chapter is summarized in blocks; this target applies to each block, not to the merged text below. The block size is set in Settings.",
                     )
                     .size(9.0)
                     .color(C::muted()),
@@ -137,10 +381,14 @@ pub(crate) fn export_choice(ui: &mut Ui, selected: bool, title: &str, caption: &
             1.0_f32,
             if selected { C::accent() } else { C::line() },
         ))
-        .corner_radius(9)
+        .corner_radius(theme::radius(9))
         .inner_margin(Margin::symmetric(11, 9))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
+            // Inside the frame the margins are already gone; wrapping the
+            // caption to this width keeps the card as wide as the panel
+            // instead of pushing the panel wider every frame.
+            let text_width = (ui.available_width() - 16.0 - ui.spacing().item_spacing.x).max(120.0);
             ui.horizontal(|ui| {
                 let (rect, _) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::hover());
                 let center = rect.center();
@@ -153,6 +401,7 @@ pub(crate) fn export_choice(ui: &mut Ui, selected: bool, title: &str, caption: &
                     ui.painter().circle_filled(center, 3.2, C::accent());
                 }
                 ui.vertical(|ui| {
+                    ui.set_max_width(text_width);
                     ui.spacing_mut().item_spacing.y = 1.0;
                     ui.label(RichText::new(title).size(12.0).strong().color(C::ink()));
                     ui.add(Label::new(RichText::new(caption).size(9.5).color(C::muted())).wrap());
@@ -228,7 +477,7 @@ pub(crate) fn steering_bar(
     Frame::NONE
         .fill(C::panel())
         .stroke(Stroke::new(1.0_f32, C::line()))
-        .corner_radius(12)
+        .corner_radius(theme::radius(12))
         .inner_margin(Margin::symmetric(14, 9))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -254,7 +503,10 @@ pub(crate) fn steering_bar(
                 && ui.input(|i| i.modifiers.command && i.key_pressed(Key::Enter));
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                ui.label(RichText::new(hint).size(8.5).color(C::muted()));
+                // The hint is long and must never widen the bar past the
+                // window; the full sentence stays on hover.
+                ui.add(Label::new(RichText::new(hint).size(8.5).color(C::muted())).truncate())
+                    .on_hover_text(hint);
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if streaming {
                         let stop = Button::new(
@@ -265,7 +517,7 @@ pub(crate) fn steering_bar(
                         )
                         .fill(C::accent_soft())
                         .stroke(Stroke::new(1.0_f32, C::accent_soft()))
-                        .corner_radius(8)
+                        .corner_radius(theme::radius(8))
                         .min_size(Vec2::new(0.0, 28.0));
                         if ui.add(stop).clicked() {
                             action = Some(SteeringAction::Stop);
@@ -279,7 +531,7 @@ pub(crate) fn steering_bar(
                         )
                         .fill(C::accent())
                         .stroke(Stroke::NONE)
-                        .corner_radius(8)
+                        .corner_radius(theme::radius(8))
                         .min_size(Vec2::new(0.0, 28.0));
                         if ui.add_enabled(!busy, go).clicked() {
                             action = Some(SteeringAction::Continue);
@@ -316,7 +568,7 @@ pub(crate) fn draft_block(
     let frame = Frame::NONE
         .fill(C::draft_bg())
         .stroke(Stroke::new(1.0_f32, C::draft_line()))
-        .corner_radius(14)
+        .corner_radius(theme::radius(14))
         .inner_margin(Margin::symmetric(16, 12))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -392,40 +644,23 @@ pub(crate) fn draft_block(
     action
 }
 
-/// The summary state as a button: the old traffic-light dot plus "Summary…".
-/// Clicking opens the window; the tooltip names the state in words.
-pub(crate) fn summary_button(ui: &mut Ui, dot: Color32, state: &str) -> Response {
-    let galley = ui.painter().layout_no_wrap(
-        "Summary…".to_string(),
-        FontId::proportional(10.5),
-        C::ink_soft(),
-    );
-    let pad = 8.0;
-    let size = Vec2::new(pad * 2.0 + 12.0 + galley.size().x, 20.0);
-    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    let background = if response.hovered() {
-        C::line()
+/// The little lamp under the chapter title: red for an unwritten summary,
+/// amber for one the chapter has outgrown or that stops mid-chapter, green for
+/// current — and green stays quiet, because a healthy chapter needs no words.
+pub(crate) fn summary_lamp(
+    summarized: bool,
+    stale: bool,
+    partial: bool,
+) -> (Color32, &'static str) {
+    if !summarized {
+        (C::red(), "No summary")
+    } else if partial {
+        (C::amber(), "Partial summary")
+    } else if stale {
+        (C::amber(), "Outdated summary")
     } else {
-        C::soft()
-    };
-    ui.painter().rect_filled(rect, 6, background);
-    ui.painter().circle_filled(
-        Pos2::new(rect.left() + pad + 3.0, rect.center().y),
-        2.6,
-        dot,
-    );
-    ui.painter().galley(
-        Pos2::new(
-            rect.left() + pad + 12.0,
-            rect.center().y - galley.size().y / 2.0,
-        ),
-        galley,
-        C::ink_soft(),
-    );
-    if response.hovered() {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        (C::green(), "")
     }
-    response.on_hover_text(format!("Open the chapter summary — {state}"))
 }
 
 pub(crate) fn caps(text: &str, color: Color32) -> RichText {
@@ -518,7 +753,7 @@ pub(crate) fn top_action(ui: &mut Ui, label: &str, active: bool) -> Response {
         } else {
             Stroke::new(1.0_f32, C::line())
         })
-        .corner_radius(8)
+        .corner_radius(theme::radius(8))
         .min_size(Vec2::new(0.0, 28.0)),
     )
 }
@@ -553,7 +788,7 @@ pub(crate) fn menu_item(ui: &mut Ui, label: &str, danger: bool) -> Response {
         .frame(false)
         .fill(Color32::TRANSPARENT)
         .stroke(Stroke::NONE)
-        .corner_radius(6),
+        .corner_radius(theme::radius(6)),
     );
     if response.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -571,7 +806,7 @@ pub(crate) fn primary(ui: &mut Ui, label: &str) -> Response {
         )
         .fill(C::accent())
         .stroke(Stroke::NONE)
-        .corner_radius(8)
+        .corner_radius(theme::radius(8))
         .min_size(Vec2::new(0.0, 32.0)),
     )
 }
@@ -579,7 +814,7 @@ pub(crate) fn primary(ui: &mut Ui, label: &str) -> Response {
 pub(crate) fn pill(ui: &mut Ui, text: &str, fg: Color32, bg: Color32) -> Response {
     Frame::NONE
         .fill(bg)
-        .corner_radius(6)
+        .corner_radius(theme::radius(6))
         .inner_margin(Margin::symmetric(6, 2))
         .show(ui, |ui| {
             ui.label(RichText::new(text).size(8.5).strong().color(fg));
@@ -613,7 +848,7 @@ pub(crate) fn filter_chip(ui: &mut Ui, label: &str, active: bool) -> Response {
         } else {
             Stroke::new(1.0_f32, C::line())
         })
-        .corner_radius(6)
+        .corner_radius(theme::radius(6))
         .min_size(Vec2::new(0.0, 24.0)),
     )
 }
@@ -623,7 +858,7 @@ pub(crate) fn preset(ui: &mut Ui, label: &str) -> Response {
         Button::new(RichText::new(label).size(10.0).color(C::ink_soft()))
             .fill(C::soft())
             .stroke(Stroke::new(1.0_f32, C::line()))
-            .corner_radius(6)
+            .corner_radius(theme::radius(6))
             .min_size(Vec2::new(0.0, 22.0)),
     )
 }
@@ -640,7 +875,7 @@ pub(crate) fn story_card(ui: &mut Ui, title: &str, meta: &str, selected: bool) -
         } else {
             Color32::TRANSPARENT
         })
-        .corner_radius(10)
+        .corner_radius(theme::radius(10))
         .inner_margin(Margin::symmetric(10, 7))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -678,7 +913,7 @@ pub(crate) fn chapter_row(
         } else {
             Color32::TRANSPARENT
         })
-        .corner_radius(9)
+        .corner_radius(theme::radius(9))
         .inner_margin(Margin::symmetric(8, 5))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -740,7 +975,7 @@ pub(crate) fn lore_card(ui: &mut Ui, entry: &LoreEntry, matched: Option<&str>) -
     Frame::NONE
         .fill(C::card())
         .stroke(Stroke::new(1.0_f32, C::line()))
-        .corner_radius(11)
+        .corner_radius(theme::radius(11))
         .inner_margin(Margin::symmetric(11, 8))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -751,6 +986,11 @@ pub(crate) fn lore_card(ui: &mut Ui, entry: &LoreEntry, matched: Option<&str>) -
                         .color(C::ink()),
                 );
                 pill(ui, &entry.category, C::ink_soft(), C::soft());
+                if entry.invented {
+                    pill(ui, "invented", C::amber(), C::amber_soft()).on_hover_text(
+                        "Proposed by the assistant at your request; not taken from a chapter",
+                    );
+                }
                 if entry.pinned {
                     pill(ui, "pinned", C::green(), C::green_soft());
                 }
@@ -803,10 +1043,203 @@ pub(crate) fn avatar(ui: &mut Ui, letter: &str, user: bool) {
     );
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AssistantChoice {
+    Accept,
+    Deny,
+    Retry,
+}
+
+/// The assistant's proposal inside the chat: what it wants to do, a preview,
+/// and the three answers. Nothing is applied here; the caller decides.
+pub(crate) fn assistant_proposal_card(
+    ui: &mut Ui,
+    proposal: &AssistantProposal,
+    chapter_title: &str,
+) -> Option<AssistantChoice> {
+    let mut choice = None;
+    Frame::NONE
+        .fill(C::accent_soft())
+        .stroke(Stroke::new(1.0_f32, C::accent()))
+        .corner_radius(theme::radius(11))
+        .inner_margin(Margin::symmetric(12, 10))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                avatar(ui, "F", false);
+                ui.label(caps("ASSISTANT PROPOSAL", C::accent_deep()));
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    pill(ui, "waits for you", C::accent_deep(), C::card());
+                });
+            });
+            ui.add_space(3.0);
+            match &proposal.action {
+                ai::AssistantAction::Summary => {
+                    ui.label(
+                        RichText::new(format!("Write a new summary of “{chapter_title}”?"))
+                            .font(serif_id(14.0))
+                            .color(C::ink()),
+                    );
+                    ui.label(
+                        RichText::new(
+                            "The current summary is replaced when the run finishes. You can stop it in the summary panel.",
+                        )
+                        .size(9.5)
+                        .color(C::muted()),
+                    );
+                }
+                ai::AssistantAction::Lore(suggestion) => {
+                    let updating = suggestion.target.is_some();
+                    let name = if updating {
+                        suggestion.target_name.clone()
+                    } else {
+                        suggestion.name.clone()
+                    };
+                    let head = if updating {
+                        format!("Add these facts to “{name}”?")
+                    } else {
+                        format!("Create a lore entry “{name}”?")
+                    };
+                    ui.label(
+                        RichText::new(head)
+                            .font(serif_id(14.0))
+                            .color(C::ink()),
+                    );
+                    ui.horizontal_wrapped(|ui| {
+                        pill(ui, &suggestion.category, C::ink_soft(), C::card());
+                        if !suggestion.aliases.trim().is_empty() {
+                            ui.label(
+                                RichText::new(format!("also: {}", suggestion.aliases.trim()))
+                                    .size(9.0)
+                                    .color(C::muted()),
+                            );
+                        }
+                    });
+                    if !suggestion.missing.trim().is_empty()
+                        && !suggestion.missing.trim().eq_ignore_ascii_case("none")
+                    {
+                        ui.label(
+                            RichText::new(format!(
+                                "Not in this chapter: {}",
+                                suggestion.missing.trim()
+                            ))
+                            .size(9.5)
+                            .color(C::amber()),
+                        );
+                    }
+                    ui.add_space(3.0);
+                    Frame::NONE
+                        .fill(C::card())
+                        .stroke(Stroke::new(1.0_f32, C::line()))
+                        .corner_radius(theme::radius(9))
+                        .inner_margin(Margin::symmetric(10, 8))
+                        .show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            ui.add(
+                                Label::new(
+                                    RichText::new(suggestion.text.trim())
+                                        .font(serif_id(13.0))
+                                        .color(C::ink_soft())
+                                        .line_height(Some(18.0)),
+                                )
+                                .wrap(),
+                            );
+                        });
+                }
+                ai::AssistantAction::Invent(suggestion) => {
+                    let name = if suggestion.name.trim().is_empty() {
+                        suggestion.target_name.trim()
+                    } else {
+                        suggestion.name.trim()
+                    };
+                    let what = match suggestion.category.to_ascii_lowercase().as_str() {
+                        "place" => "place",
+                        "faction" => "faction",
+                        "item" => "item",
+                        "lore" => "lore entry",
+                        _ => "character",
+                    };
+                    ui.label(
+                        RichText::new(format!("Create an invented {what} “{name}”?"))
+                            .font(serif_id(14.0))
+                            .color(C::ink()),
+                    );
+                    ui.horizontal_wrapped(|ui| {
+                        pill(ui, &suggestion.category, C::ink_soft(), C::card());
+                        pill(ui, "invented", C::amber(), C::amber_soft());
+                        if !suggestion.aliases.trim().is_empty() {
+                            ui.label(
+                                RichText::new(format!("also: {}", suggestion.aliases.trim()))
+                                    .size(9.0)
+                                    .color(C::muted()),
+                            );
+                        }
+                    });
+                    ui.label(
+                        RichText::new(
+                            "Invented at your request — not taken from the chapter. Accept adds it to the story memory.",
+                        )
+                        .size(9.5)
+                        .color(C::muted()),
+                    );
+                    if !suggestion.missing.trim().is_empty()
+                        && !suggestion.missing.trim().eq_ignore_ascii_case("none")
+                    {
+                        ui.label(
+                            RichText::new(format!(
+                                "Could not include: {}",
+                                suggestion.missing.trim()
+                            ))
+                            .size(9.5)
+                            .color(C::amber()),
+                        );
+                    }
+                    ui.add_space(3.0);
+                    Frame::NONE
+                        .fill(C::card())
+                        .stroke(Stroke::new(1.0_f32, C::line()))
+                        .corner_radius(theme::radius(9))
+                        .inner_margin(Margin::symmetric(10, 8))
+                        .show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            ui.add(
+                                Label::new(
+                                    RichText::new(suggestion.text.trim())
+                                        .font(serif_id(13.0))
+                                        .color(C::ink_soft())
+                                        .line_height(Some(18.0)),
+                                )
+                                .wrap(),
+                            );
+                        });
+                }
+            }
+            ui.add_space(6.0);
+            ui.horizontal_wrapped(|ui| {
+                if primary(ui, "Accept").clicked() {
+                    choice = Some(AssistantChoice::Accept);
+                }
+                if ghost(ui, "Deny").clicked() {
+                    choice = Some(AssistantChoice::Deny);
+                }
+                if ghost(ui, "Retry").clicked() {
+                    choice = Some(AssistantChoice::Retry);
+                }
+            });
+            ui.label(
+                RichText::new("Nothing changes until you accept.")
+                    .size(9.0)
+                    .italics()
+                    .color(C::muted()),
+            );
+        });
+    choice
+}
+
 pub(crate) fn intro_bubble(ui: &mut Ui) {
     Frame::NONE
         .fill(C::green_soft())
-        .corner_radius(11)
+        .corner_radius(theme::radius(11))
         .inner_margin(Margin::symmetric(11, 9))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -818,7 +1251,7 @@ pub(crate) fn intro_bubble(ui: &mut Ui) {
             ui.add(
                 Label::new(
                     RichText::new(
-                        "I can see this story's premise, its lorebook, a condensed recap of everything before and the summaries of the last few chapters. Ask me what could happen next, what a character wants, or which thread to pull. Your prose draft stays out of this conversation.",
+                        "I can see this story's premise, its lorebook, the recap and the summaries, and this chapter. Ask what could happen next — or ask me to refresh the chapter summary or pull what the chapter says about a character, place or thing into the lorebook. I prepare it; you decide. I will also tell you honestly when something does not work.",
                     )
                     .font(serif_id(13.5))
                     .color(C::ink_soft())

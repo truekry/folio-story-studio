@@ -48,8 +48,13 @@ impl FolioApp {
         let probe_base = self.library.settings.base_url.trim().to_string();
         let probe_demo = self.library.settings.is_demo();
         // A narrow window keeps the logo and the lamp, but drops the wordmark
-        // so the story title never collides with them.
-        let roomy = ctx.screen_rect().width() >= 1330.0;
+        // and the chapter line so the story title never collides with them.
+        let width = ctx.screen_rect().width();
+        let roomy = width >= 1330.0;
+        let with_chapter_line = width >= 1200.0;
+        // The controls on the right need their own room; the title is cut
+        // rather than running beneath them.
+        let title_room = (width - 660.0).max(120.0);
 
         egui::TopBottomPanel::top("topbar")
             .exact_height(68.0)
@@ -62,12 +67,12 @@ impl FolioApp {
                 ui.horizontal_centered(|ui| {
                     let (logo_rect, _) = ui.allocate_exact_size(Vec2::splat(32.0), Sense::hover());
                     ui.painter()
-                        .rect_filled(logo_rect, CornerRadius::same(9), C::accent());
+                        .rect_filled(logo_rect, CornerRadius::same(9), theme::BRAND_ORANGE);
                     ui.painter().text(
                         logo_rect.center(),
                         Align2::CENTER_CENTER,
                         "F",
-                        serif_id(20.0),
+                        theme::brand_id(20.0),
                         Color32::WHITE,
                     );
                     ui.add_space(3.0);
@@ -87,30 +92,41 @@ impl FolioApp {
                     ui.separator();
                     ui.add_space(14.0);
                     ui.scope(|ui| {
+                        ui.set_max_width(title_room);
                         ui.spacing_mut().item_spacing.y = 1.0;
-                        ui.label(
-                            RichText::new(story_title)
-                                .font(serif_id(19.0))
-                                .color(C::ink()),
+                        ui.add(
+                            Label::new(
+                                RichText::new(story_title)
+                                    .font(serif_id(19.0))
+                                    .color(C::ink()),
+                            )
+                            .truncate(),
                         );
-                        ui.label(RichText::new(chapter_line).size(10.5).color(C::muted()));
+                        if with_chapter_line {
+                            ui.add(
+                                Label::new(
+                                    RichText::new(chapter_line).size(10.5).color(C::muted()),
+                                )
+                                .truncate(),
+                            );
+                        }
                     });
 
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if top_action(ui, "Settings", false).clicked() {
+                        if top_action(ui, "Settings", self.showing(Tab::Settings)).clicked() {
                             want_settings = true;
                         }
-                        if top_action(ui, "Export", false).clicked() {
+                        if top_action(ui, "Export", self.showing(Tab::Export)).clicked() {
                             want_export = true;
                         }
-                        if top_action(ui, "Find", self.find_open)
+                        if top_action(ui, "Find", self.showing(Tab::Find))
                             .on_hover_text("Search the open chapter (Ctrl+F)")
                             .clicked()
                         {
                             want_find = true;
                         }
-                        if top_action(ui, "Summary", self.summary_open)
-                            .on_hover_text("Open or close the chapter summary window")
+                        if top_action(ui, "Summary", self.showing(Tab::Summary))
+                            .on_hover_text("Open or close the chapter summary")
                             .clicked()
                         {
                             want_summary = true;
@@ -119,7 +135,7 @@ impl FolioApp {
                             && top_action(
                                 ui,
                                 &format!("Deleted ({deleted_count})"),
-                                self.trash_open,
+                                self.showing(Tab::Trash),
                             )
                             .on_hover_text(
                                 "Put back something you deleted — kept until Folio closes",
@@ -154,7 +170,7 @@ impl FolioApp {
                         let lamp = probe_chip(ui, &self.probe, &probe_base, probe_demo);
                         if lamp.clicked() {
                             if probe_demo {
-                                want_settings = true;
+                                self.open_tab(Tab::Settings);
                             } else if self.test_rx.is_none() {
                                 self.start_test();
                             }
@@ -164,27 +180,33 @@ impl FolioApp {
             });
 
         if want_ai {
-            self.right_tab = Tab::Ai;
-            self.right_open = true;
+            self.toggle_tab(Tab::Ai);
         }
         if want_lore {
-            self.right_tab = Tab::Lore;
-            self.right_open = true;
+            self.toggle_tab(Tab::Lore);
         }
         if want_settings {
-            self.settings_open = true;
+            self.toggle_tab(Tab::Settings);
         }
         if want_export {
-            self.open_export();
+            if self.showing(Tab::Export) {
+                self.right_open = false;
+            } else {
+                self.open_export();
+            }
         }
         if want_trash {
-            self.trash_open = true;
+            self.toggle_tab(Tab::Trash);
         }
         if want_find {
-            self.open_find();
+            if self.showing(Tab::Find) {
+                self.right_open = false;
+            } else {
+                self.open_find();
+            }
         }
         if want_summary {
-            self.summary_open = !self.summary_open;
+            self.toggle_tab(Tab::Summary);
         }
     }
 

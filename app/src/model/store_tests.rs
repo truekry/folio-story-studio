@@ -192,6 +192,19 @@ fn the_active_book_key_survives_a_restart() {
 }
 
 #[test]
+fn the_chosen_look_survives_a_restart() {
+    let dir = temp_dir("look");
+    let mut library = Library::sample();
+    library.look = crate::theme::Look::Corpo;
+    fs::write(dir.join("library.json"), legacy_text(&library)).expect("legacy file");
+    let (loaded, mut store, _) = Store::open(&dir);
+    assert_eq!(loaded.look, crate::theme::Look::Corpo);
+    store.save(&loaded).expect("save");
+    let (again, _, _) = Store::open(&dir);
+    assert_eq!(again.look, crate::theme::Look::Corpo);
+}
+
+#[test]
 fn deleting_a_book_removes_its_file_and_undo_writes_it_back() {
     let (dir, mut library, mut store) = migrated("delete");
     let key = library.stories[0].key.clone();
@@ -239,6 +252,53 @@ fn a_broken_config_keeps_story_files_and_uses_defaults() {
             .starts_with("config.json.broken-")));
     store.save(&loaded).expect("write a fresh config");
     assert!(dir.join("config.json").exists());
+}
+
+/// An editor on Windows may save JSON with a byte-order mark. The file must
+/// load unchanged; Folio must not treat it as broken or rename it.
+#[test]
+fn a_config_with_a_utf8_bom_loads_without_a_backup() {
+    let (dir, library, _) = migrated("bom-config");
+    let text = fs::read_to_string(dir.join("config.json")).expect("config");
+    fs::write(dir.join("config.json"), format!("\u{feff}{text}")).expect("write a BOM config");
+
+    let (loaded, _store, report) = Store::open(&dir);
+    assert!(
+        !report
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("config.json")),
+        "{:?}",
+        report.warnings
+    );
+    assert_eq!(loaded.stories.len(), library.stories.len());
+    assert!(
+        !fs::read_dir(&dir)
+            .expect("data folder")
+            .flatten()
+            .any(|entry| entry.file_name().to_string_lossy().contains(".broken-")),
+        "a BOM is not a defect"
+    );
+
+    // The books are read the same way.
+    let story_path = fs::read_dir(dir.join("stories"))
+        .expect("stories")
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
+        .expect("a book file");
+    let story_text = fs::read_to_string(&story_path).expect("book");
+    fs::write(&story_path, format!("\u{feff}{story_text}")).expect("write a BOM book");
+    let (loaded, _, report) = Store::open(&dir);
+    assert_eq!(loaded.stories.len(), library.stories.len());
+    assert!(
+        !report
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("book file")),
+        "{:?}",
+        report.warnings
+    );
 }
 
 #[test]

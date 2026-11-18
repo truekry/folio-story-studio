@@ -4,27 +4,40 @@ use super::*;
 
 impl FolioApp {
     pub fn new(cc: &eframe::CreationContext<'_>, screenshot: Option<PathBuf>) -> Self {
-        theme::install(&cc.egui_ctx);
         let shot = screenshot.map(|path| Shot {
             path,
             frames: 0,
             requested: false,
         });
+        crate::crash::note("startup");
         let screenshot_mode = shot.is_some();
         let (library, store, load_report) = if shot.is_some() {
-            (Library::sample(), None, crate::model::LoadReport::default())
+            // A screenshot may use the local test bench read-only: set
+            // FOLIO_DATA_DIR. Without it the built-in sample keeps the check
+            // stable and independent of the author's library.
+            let bench = std::env::var("FOLIO_DATA_DIR")
+                .ok()
+                .map(|dir| dir.trim().to_string())
+                .filter(|dir| !dir.is_empty());
+            if let Some(dir) = bench {
+                let (library, _read_only, report) = Store::open(std::path::Path::new(&dir));
+                (library, None, report)
+            } else {
+                (Library::sample(), None, crate::model::LoadReport::default())
+            }
         } else {
             let (library, store, report) = Store::open(&crate::model::data_dir());
             (library, Some(store), report)
         };
-        // The library may name an installed font; install let the default
-        // system serif stand in until the file is known.
-        if !library.writing_font.is_empty() {
-            let path = std::path::Path::new(&library.writing_font);
-            if path.exists() {
-                theme::use_writing_font(&cc.egui_ctx, Some(path));
-            }
-        }
+        // The look and the writing face can only be read once the library is
+        // open. Both happen before the first frame, so nothing flashes.
+        let writing = std::path::PathBuf::from(&library.writing_font);
+        let writing = if writing.is_file() {
+            Some(writing.as_path())
+        } else {
+            None
+        };
+        theme::install(&cc.egui_ctx, library.look, writing);
         let active_story = library
             .active_story
             .min(library.stories.len().saturating_sub(1));
@@ -35,6 +48,12 @@ impl FolioApp {
             .unwrap_or(0);
         // Handy for checking a particular view during development.
         let debug_view = std::env::var("FOLIO_VIEW").unwrap_or_default();
+        // `FOLIO_DESK_WIDTH=640` pins the side panel for screenshot checks.
+        let desk_width = std::env::var("FOLIO_DESK_WIDTH")
+            .ok()
+            .and_then(|value| value.trim().parse::<f32>().ok())
+            .filter(|width| (DESK_MIN_WIDTH..=DESK_MAX_WIDTH).contains(width))
+            .unwrap_or(378.0);
         let mut library = library;
         if debug_view == "empty" {
             library.stories.clear();
@@ -127,6 +146,19 @@ impl FolioApp {
             .get(active_story)
             .map(|story| story.title.clone())
             .unwrap_or_default();
+        // One debug view at a time: whichever panel a screenshot asks for.
+        let debug_tab = match debug_view.as_str() {
+            "lore" => Tab::Lore,
+            "settings" | "settings-lan" | "settings-key" => Tab::Settings,
+            "prompts" | "prompt-layout" => Tab::Prompts,
+            "summary-popup" | "summary-streaming" => Tab::Summary,
+            "find" | "find-replace" | "find-jump" | "replace-confirm" => Tab::Find,
+            "export" | "export-txt" | "export-done" | "export-pdf" | "export-overwrite" => {
+                Tab::Export
+            }
+            "trash" => Tab::Trash,
+            _ => Tab::Ai,
+        };
         let mut app = Self {
             library,
             store,
@@ -134,13 +166,8 @@ impl FolioApp {
             active_story,
             active_chapter,
             right_open: true,
-            right_tab: if debug_view == "lore" {
-                Tab::Lore
-            } else {
-                Tab::Ai
-            },
-            settings_open: debug_view == "settings",
-            prompts_open: debug_view == "prompts",
+            right_tab: debug_tab,
+            desk_width,
             show_key: false,
             new_story_open: debug_view == "new-story",
             new_story_title: if debug_view == "new-story" {
@@ -159,9 +186,10 @@ impl FolioApp {
             confirm,
             trash: Vec::new(),
             trash_next_id: 1,
-            trash_open: debug_view == "trash",
             lore_editor: None,
             lore_proposal: None,
+            assistant_proposal: None,
+            assistant_ask: String::new(),
             lore_search: String::new(),
             system_fonts: crate::fonts::system_fonts(),
             lore_filter: "All".to_string(),
@@ -182,8 +210,6 @@ impl FolioApp {
             dirty: false,
             last_edit: Instant::now(),
             save_retry_at: None,
-            summary_open: false,
-            find_open: debug_view == "find" || debug_view == "find-replace",
             find_query: if debug_view == "find" || debug_view == "find-replace" {
                 "door".to_string()
             } else {
@@ -203,14 +229,10 @@ impl FolioApp {
             draft_live: None,
             draft_error: None,
             draft_follow: true,
+            rewrite_nudge: false,
             draft_reveal: false,
             scroll_chat: false,
             chat_follow: true,
-            export_open: debug_view == "export"
-                || debug_view == "export-txt"
-                || debug_view == "export-done"
-                || debug_view == "export-pdf"
-                || debug_view == "export-overwrite",
             export_kind: if debug_view == "export-txt" || debug_view == "export-done" {
                 ExportKind::Chapters
             } else {
@@ -226,7 +248,7 @@ impl FolioApp {
         if debug_view == "settings-lan" {
             // A typical home setup: a LAN address, no key, and
             // the model list the endpoint reported.
-            app.settings_open = true;
+            app.open_tab(Tab::Settings);
             app.library.settings.base_url = "192.168.10.20:5001/v1".to_string();
             app.library.settings.api_key.clear();
             app.library.settings.model = "local-model".to_string();
@@ -236,7 +258,7 @@ impl FolioApp {
         }
         if debug_view == "settings-key" {
             // A key already typed, so the Clear key button is on screen.
-            app.settings_open = true;
+            app.open_tab(Tab::Settings);
             app.library.settings.api_key = "sk-example-key-that-should-not-be-leaked".to_string();
         }
         if debug_view == "undo-toast" {
@@ -270,7 +292,7 @@ impl FolioApp {
             app.replace_in_book("door", "gate", false, None);
         }
         if debug_view == "replace-confirm" {
-            app.find_open = true;
+            app.open_tab(Tab::Find);
             app.find_query = "door".to_string();
             app.find_replacement = "gate".to_string();
             if let Some(story) = app.library.stories.get(app.active_story) {
@@ -338,11 +360,8 @@ impl FolioApp {
                 app.edit_lore(Some(entry_id));
             }
         }
-        if debug_view == "summary-hidden" {
-            app.library.show_summary = false;
-        }
         if debug_view == "summary-popup" || debug_view == "summary-streaming" {
-            app.summary_open = true;
+            app.open_tab(Tab::Summary);
         }
         if debug_view == "lore-proposal" {
             // The shape the review window takes after a real pass: an existing
@@ -373,14 +392,14 @@ impl FolioApp {
                     let chapter_id = chapter.key.clone();
                     chapter.chat = vec![ChatMessage {
                         role: "user".to_string(),
-                        text: "What should Fluttershy do about the creature?".to_string(),
+                        text: "What should Mira do about the letter?".to_string(),
                         demo: false,
                     }];
                     let (tx, rx) = mpsc::channel::<StreamEvent>();
                     // Keep the sender alive: no Done is ever sent.
                     std::mem::forget(tx);
                     let mut stream = StreamFold::default();
-                    stream.text = "Since Fluttershy has never seen the creature before, I would suggest she asks Lyra first. Lyra is the one who knows the town's rules, and the question puts her in a position where she has to choose between explaining and deflecting.".to_string();
+                    stream.text = "Since Mira has never seen the house empty before, I would suggest she asks Wren first. Wren is the one who knows the town's rules, and the question puts him in a position where he has to choose between explaining and deflecting.".to_string();
                     app.job = Some(Job {
                         kind: JobKind::Action(Action::Brainstorm),
                         story_id,
@@ -402,11 +421,12 @@ impl FolioApp {
                     let story_id = story.key.clone();
                     let chapter_id = chapter.key.clone();
                     let base_hash = crate::model::content_hash(&chapter.body);
+                    let total = paragraph_ranges(&chapter.body).len().max(1);
                     let (tx, rx) = mpsc::channel::<StreamEvent>();
                     // Keep the sender alive: no Done is ever sent.
                     std::mem::forget(tx);
                     let mut stream = StreamFold::default();
-                    stream.progress = Some((3, 12));
+                    stream.progress = Some((3.min(total), total));
                     app.job = Some(Job {
                         kind: JobKind::Proofread { base_hash },
                         story_id,
@@ -471,6 +491,76 @@ opens the garden gate instead."
                 }
             }
         }
+        if debug_view == "assistant-lore"
+            || debug_view == "assistant-summary"
+            || debug_view == "assistant-invent"
+        {
+            app.open_tab(Tab::Ai);
+            if let Some(story) = app.library.stories.get_mut(app.active_story) {
+                if let Some(chapter) = story.chapters.get(app.active_chapter) {
+                    let story_id = story.key.clone();
+                    let chapter_id = chapter.key.clone();
+                    app.assistant_ask =
+                        "Invent a name, personality and appearance for Tim's mother.".to_string();
+                    let action = if debug_view == "assistant-summary" {
+                        ai::AssistantAction::Summary
+                    } else if debug_view == "assistant-invent" {
+                        ai::AssistantAction::Invent(ai::LoreSuggestion {
+                            target: None,
+                            target_name: String::new(),
+                            name: "Elara Vale".to_string(),
+                            category: "Character".to_string(),
+                            aliases: "Tim's mother".to_string(),
+                            triggers: "Tim, the house, the map room".to_string(),
+                            text: "A woman in her late forties with a restless, bird-like temperament. She has fine, silvering hair kept in a tight, practical knot and hands that are constantly stained with ink or salt. She carries herself with the guardedness of a tenant of the coast rather than its inhabitant.".to_string(),
+                            missing: String::new(),
+                            invented: true,
+                            well_formed: true,
+                        })
+                    } else {
+                        let entry = story
+                            .lore
+                            .iter()
+                            .find(|entry| entry.name.contains("Mira"))
+                            .cloned();
+                        let suggestion = match entry {
+                            Some(entry) => ai::LoreSuggestion {
+                                target: Some(entry.key.clone()),
+                                target_name: entry.name.clone(),
+                                name: entry.name.clone(),
+                                category: entry.category.clone(),
+                                aliases: String::new(),
+                                triggers: "brass compass, red coat".to_string(),
+                                text: "She keeps a brass compass on a leather cord and taps her thumb against her knuckles.".to_string(),
+                                missing: "clothes".to_string(),
+                                invented: false,
+                                well_formed: true,
+                            },
+                            None => ai::LoreSuggestion {
+                                target: None,
+                                target_name: String::new(),
+                                name: "Mira".to_string(),
+                                category: "Character".to_string(),
+                                aliases: String::new(),
+                                triggers: String::new(),
+                                text: "Mira is the point-of-view character.".to_string(),
+                                missing: String::new(),
+                                invented: false,
+                                well_formed: true,
+                            },
+                        };
+                        ai::AssistantAction::Lore(suggestion)
+                    };
+                    app.assistant_proposal = Some(AssistantProposal {
+                        story_id,
+                        chapter_id,
+                        ask: app.assistant_ask.clone(),
+                        action,
+                    });
+                    app.scroll_chat = true;
+                }
+            }
+        }
         if debug_view == "recap" {
             // A window narrow enough that the story-so-far block appears next to
             // the recent summaries.
@@ -504,10 +594,6 @@ opens the garden gate instead."
         if debug_view == "chapter-chat" || debug_view == "chapter-chat-other" {
             // One conversation per chapter: each chapter keeps its own, and a
             // long one has already folded its oldest turns into a memory.
-            app.library.settings.base_url = "192.168.10.20:5001/v1".to_string();
-            app.library.settings.api_key.clear();
-            app.library.settings.model = "local-model".to_string();
-            app.library.settings.context_limit = 32768;
             let other = debug_view == "chapter-chat-other";
             if let Some(story) = app.library.stories.get_mut(app.active_story) {
                 if story.chapters.len() > 1 {
@@ -700,6 +786,7 @@ carrying the smell of cold iron, and the house settled around her as if it had b
                         story_id: story_id.clone(),
                         chapter_id: chapter_id.clone(),
                         draft,
+                        guard_attempt: 0,
                     });
                 }
                 app.draft_reveal = true;
@@ -719,7 +806,6 @@ carrying the smell of cold iron, and the house settled around her as if it had b
                     "The storm reaches the harbour before dawn, and Wren is already on the pier."
                         .to_string();
             }
-            app.draft_reveal = true;
         }
         if (!screenshot_mode || debug_view == "probe-live") && !app.library.settings.is_demo() {
             // The very run the Settings window makes when someone presses
@@ -758,6 +844,16 @@ carrying the smell of cold iron, and the house settled around her as if it had b
             .saturating_sub(1);
         self.active_chapter = self.active_chapter.min(max);
         self.library.active_story = self.active_story;
+        // A proposal for a chapter that no longer exists is meaningless.
+        let gone = self.assistant_proposal.as_ref().is_some_and(|proposal| {
+            self.library
+                .story(&proposal.story_id)
+                .and_then(|story| story.chapter(&proposal.chapter_id))
+                .is_none()
+        });
+        if gone {
+            self.assistant_proposal = None;
+        }
     }
 
     pub(crate) fn story_id(&self) -> String {
@@ -795,6 +891,18 @@ carrying the smell of cold iron, and the house settled around her as if it had b
             born: Instant::now(),
             undo: Some(UndoAction::Replace(undo)),
         });
+    }
+
+    /// Ctrl+Z outside a text field: take back the change the current notice
+    /// offers, if any. A notice without an undo action does nothing.
+    pub(crate) fn undo_last_change(&mut self) {
+        let Some(undo) = self.toast.as_ref().and_then(|toast| toast.undo.clone()) else {
+            return;
+        };
+        match undo {
+            UndoAction::Delete(id) => self.restore_trash(id),
+            UndoAction::Replace(snapshot) => self.restore_replacement(snapshot),
+        }
     }
 
     pub(crate) fn next_trash_id(&mut self) -> u64 {
@@ -838,7 +946,8 @@ carrying the smell of cold iron, and the house settled around her as if it had b
         self.active_chapter = self.library.stories[index]
             .open_chapter
             .min(self.library.stories[index].chapters.len().saturating_sub(1));
-        self.summary_open = false;
+        self.close_tab(Tab::Summary);
+        self.clear_assistant();
         self.editor_selection = None;
         self.find_index = None;
         self.ai_input.clear();
@@ -856,7 +965,8 @@ carrying the smell of cold iron, and the house settled around her as if it had b
         }
         self.active_chapter = index;
         self.library.stories[self.active_story].open_chapter = index;
-        self.summary_open = false;
+        self.close_tab(Tab::Summary);
+        self.clear_assistant();
         self.editor_selection = None;
         self.find_index = None;
         self.scroll_chat = true;
@@ -867,6 +977,23 @@ carrying the smell of cold iron, and the house settled around her as if it had b
     pub(crate) fn shortcuts(&mut self, ctx: &egui::Context) {
         if ctx.input(|i| i.modifiers.command && i.key_pressed(Key::S)) {
             self.save_now();
+        }
+        // Ctrl+Z takes back the last replace or delete while its notice is
+        // up. A replace wins even while the editor has focus: the programmatic
+        // change is not in egui's own undo history, so letting the field handle
+        // the key would do nothing. Consuming the key keeps egui from undoing a
+        // second, unrelated edit in the same frame.
+        let replace_pending = self
+            .toast
+            .as_ref()
+            .is_some_and(|toast| matches!(toast.undo, Some(UndoAction::Replace(_))));
+        if ctx.input(|i| i.modifiers.command && !i.modifiers.shift && i.key_pressed(Key::Z))
+            && (replace_pending || !ctx.wants_keyboard_input())
+        {
+            ctx.input_mut(|i| {
+                i.consume_key(egui::Modifiers::COMMAND, Key::Z);
+            });
+            self.undo_last_change();
         }
         if ctx.input(|i| i.modifiers.command && i.key_pressed(Key::F)) {
             self.open_find();

@@ -71,8 +71,8 @@ fn a_zero_word_target_asks_for_the_whole_window() {
 #[test]
 fn a_length_target_decides_how_much_room_the_reply_gets() {
     // Roughly two tokens per word, plus room to finish the sentence.
-    assert_eq!(target_reply_tokens(90), 380);
-    assert_eq!(target_reply_tokens(240), 680);
+    assert_eq!(target_reply_tokens(90), 280);
+    assert_eq!(target_reply_tokens(240), 580);
     // A request without a target keeps the usual reply limit.
     let settings = AiSettings::default();
     assert_eq!(settings.max_tokens, 700);

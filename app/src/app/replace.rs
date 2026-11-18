@@ -11,7 +11,7 @@ impl FolioApp {
             );
             return;
         }
-        self.find_open = true;
+        self.open_tab(Tab::Find);
         self.find_focus = true;
         self.find_replace = false;
         self.find_index = None;
@@ -44,6 +44,14 @@ impl FolioApp {
             self.notify("There are no matches left to replace.", false);
             return;
         }
+        crate::crash::note(format!(
+            "replace {total} matches in {}",
+            if only_chapter.is_some() {
+                "one chapter"
+            } else {
+                "the book"
+            }
+        ));
         let mut saved: Vec<(String, String)> = Vec::new();
         let mut touched = 0usize;
         if let Some(story) = self.library.story_mut(&story_id) {
@@ -77,6 +85,7 @@ impl FolioApp {
     }
 
     pub(crate) fn restore_replacement(&mut self, undo: ReplaceUndo) {
+        crate::crash::note("undo replacement");
         let Some(story) = self.library.story_mut(&undo.story_id) else {
             self.notify("That story is no longer open, so the change stayed.", true);
             return;

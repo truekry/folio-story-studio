@@ -47,7 +47,7 @@ fn the_prompt_lays_out_recap_recent_and_current() {
     let library = Library::sample();
     let story = &library.stories[0];
     let chapter = &story.chapters[2];
-    let context = story_context(story, chapter, 1);
+    let context = story_context(story, chapter, 1, 6000);
     let recap_at = context.find("STORY SO FAR").expect("recap block");
     let recent_at = context
         .find("RECENT CHAPTER SUMMARIES")
@@ -68,11 +68,11 @@ fn a_narrow_window_moves_more_into_the_recap() {
     let story = &library.stories[0];
     let chapter = &story.chapters[2];
 
-    let wide = story_context(story, chapter, 5);
+    let wide = story_context(story, chapter, 5, 6000);
     assert!(!wide.contains("STORY SO FAR"));
     assert!(wide.contains("Chapter 1 — The Tide Map"));
 
-    let narrow = story_context(story, chapter, 0);
+    let narrow = story_context(story, chapter, 0, 6000);
     assert!(narrow.contains("STORY SO FAR (chapters 1–2, condensed)"));
     assert!(!narrow.contains("RECENT CHAPTER SUMMARIES"));
     // Chapter one is condensed into the recap, without its label.
@@ -102,8 +102,9 @@ fn steering_joins_the_prompt_only_when_it_is_written() {
         ),
         "{steered}"
     );
-    // Everything before the block is unchanged.
-    assert!(steered.starts_with(&plain));
+    // Everything before the steering block is unchanged.
+    assert!(steered.starts_with("TASK:"));
+    assert!(plain.starts_with("TASK:"));
 
     // Brainstorming is not prose: its note stays out of the request.
     let chat = chat_prompt(
@@ -132,9 +133,9 @@ fn a_typed_brainstorm_question_is_answered_as_a_partner() {
         "",
         &settings,
     );
-    // The partner's role comes first, the question is appended to it.
+    // The assistant's role comes first, the question is appended to it.
     assert!(
-        prompt.contains("TASK:\nAnswer as the author's writing partner"),
+        prompt.contains("TASK:\nAnswer as the author's assistant for this chapter"),
         "{prompt}"
     );
     assert!(
@@ -153,7 +154,7 @@ fn a_typed_brainstorm_question_is_answered_as_a_partner() {
     // Without a question only the role is sent.
     let empty = chat_prompt(story, chapter, Action::Brainstorm, "", "", &settings);
     assert!(!empty.contains("AUTHOR'S QUESTION"), "{empty}");
-    assert!(empty.contains("Answer as the author's writing partner"));
+    assert!(empty.contains("Answer as the author's assistant for this chapter"));
 
     // An edited role is kept, and the question follows it.
     settings.prompts.brainstorm.text = "Be blunt.".to_string();
@@ -188,8 +189,8 @@ fn summary_prompt_sees_the_same_memory_as_the_writer() {
     assert!(windowed.contains("RECENT CHAPTER SUMMARIES"));
 }
 
-/// A summary asks for a length, so a chatty local model knows where to
-/// stop — and it is told, in the same breath, to finish its sentence.
+/// A summary asks for a hard word limit, so a chatty local model knows where
+/// to stop.
 #[test]
 fn the_summary_asks_for_a_length_and_a_finished_sentence() {
     let library = Library::sample();
@@ -197,29 +198,30 @@ fn the_summary_asks_for_a_length_and_a_finished_sentence() {
     let chapter = &story.chapters[2];
     let settings = AiSettings::default();
     let prompt = single_summary(story, chapter, &settings);
-    assert!(prompt.contains("about 90 words"), "{prompt}");
-    assert!(prompt.contains("finish your last sentence"), "{prompt}");
+    assert!(prompt.contains("at most 90 words"), "{prompt}");
+    assert!(prompt.contains("Do not exceed 90"), "{prompt}");
 
     // The author may want a longer summary; the number follows.
     let mut longer = AiSettings::default();
     longer.prompts.summary.words = Some(140);
     let prompt = single_summary(story, chapter, &longer);
-    assert!(prompt.contains("about 140 words"), "{prompt}");
-    assert!(!prompt.contains("about 90 words"));
+    assert!(prompt.contains("at most 140 words"), "{prompt}");
+    assert!(!prompt.contains("at most 90 words"));
 
     // Zero takes the length request out entirely.
     let mut no_target = AiSettings::default();
     no_target.prompts.summary.words = Some(0);
     let prompt = single_summary(story, chapter, &no_target);
-    assert!(!prompt.contains("Length:"), "{prompt}");
+    assert!(!prompt.contains("Answer in at most"), "{prompt}");
 }
 
 #[test]
 fn the_proofreader_keeps_the_authors_words() {
     let prompt = proofread_prompt("She walk to the see.");
-    assert!(prompt.contains("careful proofreader"), "{prompt}");
     assert!(prompt.contains("Correct only spelling"), "{prompt}");
-    assert!(prompt.contains("do not rewrite"), "{prompt}");
+    assert!(prompt.contains("Do not rewrite"), "{prompt}");
+    assert!(prompt.contains("OLD:"), "{prompt}");
+    assert!(prompt.contains("NEW:"), "{prompt}");
     assert!(prompt.contains("She walk to the see."), "{prompt}");
 }
 
@@ -246,32 +248,74 @@ fn the_summary_prompt_is_a_plain_text_memory_keeper() {
 
 #[test]
 fn an_authors_instruction_replaces_the_built_in_one() {
+    let library = Library::sample();
+    let story = &library.stories[0];
+    let chapter = &story.chapters[1];
     let mut settings = AiSettings::default();
     settings.prompts.rewrite.text =
         "Make the passage colder and shorter, keep every fact.".to_string();
-    let text = Action::Rewrite.instruction("", "The door gave way.", &settings.prompts);
-    assert!(text.contains("colder and shorter"), "{text}");
-    assert!(!text.contains("sharper and more concrete"), "{text}");
+    let prompt = chat_prompt(
+        story,
+        chapter,
+        Action::Rewrite,
+        "",
+        "The door gave way.",
+        &settings,
+    );
+    assert!(
+        prompt.contains("Make the passage colder and shorter"),
+        "{prompt}"
+    );
+    assert!(!prompt.contains("sharper, more concrete"), "{prompt}");
     // The passage is added by Folio, so an edited prompt cannot lose it.
-    assert!(text.contains("PASSAGE:\nThe door gave way."), "{text}");
+    assert!(prompt.contains("PASSAGE:\nThe door gave way."), "{prompt}");
+    // The instruction leads, the source sits in the middle, a reminder closes.
+    assert!(prompt.starts_with("TASK:"), "{prompt}");
+    assert!(prompt.find("TASK:") < prompt.find("PASSAGE:"), "{prompt}");
+    assert!(prompt.find("PASSAGE:") < prompt.find("NOW:"), "{prompt}");
 
     // Reset means: back to the built-in text.
     settings.prompts.rewrite = Default::default();
-    let text = Action::Rewrite.instruction("", "The door gave way.", &settings.prompts);
-    assert!(text.contains("sharper and more concrete"), "{text}");
-    assert!(text.contains("PASSAGE:\nThe door gave way."), "{text}");
+    let prompt = chat_prompt(
+        story,
+        chapter,
+        Action::Rewrite,
+        "",
+        "The door gave way.",
+        &settings,
+    );
+    assert!(prompt.contains("sharper, more concrete"), "{prompt}");
+    assert!(prompt.contains("PASSAGE:\nThe door gave way."), "{prompt}");
 }
 
 #[test]
 fn elaborating_uses_its_own_text_and_keeps_the_passage() {
+    let library = Library::sample();
+    let story = &library.stories[0];
+    let chapter = &story.chapters[1];
     let mut settings = AiSettings::default();
-    let text = Action::Elaborate.instruction("", "The door gave way.", &settings.prompts);
-    assert!(text.contains("Elaborate the passage below"), "{text}");
-    assert!(text.contains("PASSAGE:\nThe door gave way."), "{text}");
+    let prompt = chat_prompt(
+        story,
+        chapter,
+        Action::Elaborate,
+        "",
+        "The door gave way.",
+        &settings,
+    );
+    assert!(prompt.contains("Expand the passage in CONTEXT"), "{prompt}");
+    assert!(prompt.contains("PASSAGE:\nThe door gave way."), "{prompt}");
 
     settings.prompts.elaborate.text = "Slow the moment down.".to_string();
-    let own = Action::Elaborate.instruction("", "The door gave way.", &settings.prompts);
-    assert!(own.starts_with("Slow the moment down."), "{own}");
+    let own = chat_prompt(
+        story,
+        chapter,
+        Action::Elaborate,
+        "",
+        "The door gave way.",
+        &settings,
+    );
+    assert!(own.contains("Slow the moment down."), "{own}");
+    assert!(own.starts_with("TASK:"), "{own}");
     assert!(own.contains("PASSAGE:\nThe door gave way."), "{own}");
 }
 
@@ -431,4 +475,121 @@ fn an_ongoing_chapter_is_not_mistaken_for_a_new_one() {
         !prompt.contains("NEW CHAPTER"),
         "a chapter with prose is not a fresh new chapter: {prompt}"
     );
+}
+
+/// Dragging down lands after the target, dragging up lands before it; dropping
+/// a block onto itself changes nothing.
+#[test]
+fn moving_a_block_by_drag_reorders_the_layout() {
+    let mut order = PromptBlock::DEFAULT_ORDER.to_vec();
+    assert!(move_block(
+        &mut order,
+        PromptBlock::StorySoFar,
+        PromptBlock::Task
+    ));
+    assert_eq!(order[0], PromptBlock::StorySoFar);
+
+    assert!(move_block(
+        &mut order,
+        PromptBlock::Task,
+        PromptBlock::Story
+    ));
+    let task = order
+        .iter()
+        .position(|block| *block == PromptBlock::Task)
+        .expect("task is here");
+    let story = order
+        .iter()
+        .position(|block| *block == PromptBlock::Story)
+        .expect("story is here");
+    assert!(task > story, "dragging down lands after the target");
+
+    assert!(!move_block(
+        &mut order,
+        PromptBlock::Task,
+        PromptBlock::Task
+    ));
+    assert_eq!(order.len(), PromptBlock::DEFAULT_ORDER.len());
+}
+
+/// The layout repairs a hand-edited list instead of losing blocks.
+#[test]
+fn the_prompt_layout_keeps_every_block_and_drops_junk() {
+    let standard = normalized_order(&[]);
+    assert_eq!(standard.as_slice(), PromptBlock::DEFAULT_ORDER.as_slice());
+
+    let saved = vec![
+        "current_chapter".to_string(),
+        "story".to_string(),
+        "current_chapter".to_string(),
+        "assistant_rules".to_string(),
+        "bogus".to_string(),
+    ];
+    let order = normalized_order(&saved);
+    assert_eq!(order[0], PromptBlock::CurrentChapter);
+    assert_eq!(order[1], PromptBlock::Story);
+    assert_eq!(order.len(), PromptBlock::DEFAULT_ORDER.len());
+    assert!(order.contains(&PromptBlock::Task));
+}
+
+/// A custom order changes the assembled prompt; blocks that do not belong to
+/// the action stay out even when they are in the order.
+#[test]
+fn a_custom_order_rebuilds_the_prompt_and_skips_blocks_that_do_not_apply() {
+    let library = Library::sample();
+    let story = &library.stories[0];
+    let chapter = &story.chapters[1];
+    let mut settings = AiSettings::default();
+    settings.prompts.order = vec![
+        "current_chapter".to_string(),
+        "story".to_string(),
+        "task".to_string(),
+    ];
+    let prompt = chat_prompt(story, chapter, Action::Continue, "", "", &settings);
+    assert!(
+        prompt.find("CURRENT CHAPTER") < prompt.find("STORY:"),
+        "{prompt}"
+    );
+    assert!(prompt.find("STORY:") < prompt.find("TASK:"), "{prompt}");
+    // Normalization appends the blocks the saved list did not name.
+    assert!(prompt.contains("LOREBOOK"), "{prompt}");
+
+    let edit = chat_prompt(story, chapter, Action::Rewrite, "", "The door.", &settings);
+    assert!(!edit.contains("CURRENT CHAPTER"), "{edit}");
+    assert!(edit.contains("PASSAGE:\nThe door."), "{edit}");
+}
+
+/// The assistant frame names its two actions, states the honesty rule and can
+/// never carry the API key.
+#[test]
+fn the_assistant_prompt_names_its_actions_and_never_carries_the_key() {
+    let library = Library::sample();
+    let story = &library.stories[0];
+    let chapter = &story.chapters[1];
+    let settings = AiSettings {
+        api_key: "sk-do-not-leak".to_string(),
+        ..Default::default()
+    };
+    let prompt = chat_prompt(
+        story,
+        chapter,
+        Action::Brainstorm,
+        "Add Mira's clothes.",
+        "",
+        &settings,
+    );
+    assert!(prompt.contains("[[FOLIO:LORE]]"), "{prompt}");
+    assert!(prompt.contains("[[FOLIO:SUMMARY]]"), "{prompt}");
+    assert!(prompt.contains("[[FOLIO:INVENT]]"), "{prompt}");
+    assert!(prompt.contains("do not praise by default"), "{prompt}");
+    assert!(prompt.contains("No settings or API keys"), "{prompt}");
+    assert!(!prompt.contains("sk-do-not-leak"));
+    // The fixed rules are appended after the sortable prompt, not part of it.
+    let frame_at = prompt.find("THREE ACTIONS").expect("assistant frame");
+    let chapter_at = prompt.find("CURRENT CHAPTER").expect("chapter block");
+    assert!(frame_at > chapter_at, "{prompt}");
+
+    // Prose writing is not the assistant and must not see the action rules.
+    let prose = chat_prompt(story, chapter, Action::Continue, "", "", &settings);
+    assert!(!prose.contains("[[FOLIO:LORE]]"));
 }

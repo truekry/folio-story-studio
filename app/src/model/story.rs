@@ -270,6 +270,12 @@ impl Chapter {
         !self.summary.trim().is_empty()
     }
 
+    /// A summary written from a stopped run: real text, but only the blocks
+    /// that had finished when the author pressed Stop.
+    pub fn is_partial_summary(&self) -> bool {
+        self.is_summarized() && self.summary_source == "partial"
+    }
+
     pub fn summary_is_stale(&self) -> bool {
         if !self.is_summarized() {
             return false;
@@ -285,6 +291,8 @@ impl Chapter {
     pub fn summary_state(&self) -> &'static str {
         if !self.is_summarized() {
             "not summarized"
+        } else if self.is_partial_summary() {
+            "partial summary"
         } else if self.summary_is_stale() {
             "summary needs refreshing"
         } else {

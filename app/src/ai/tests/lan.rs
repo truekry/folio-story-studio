@@ -217,18 +217,15 @@ fn the_lan_block_summary_pipeline_returns_one_text() {
     }
 
     let combined = parts.join("\n\n");
-    let prompt = summary_merge_prompt(&combined);
-    let words = parts
-        .iter()
-        .map(|part| part.split_whitespace().count())
-        .sum::<usize>() as u32;
+    let merge_words = summary_merge_words(&settings);
+    let prompt = summary_merge_prompt(&combined, merge_words);
     let mut reply = stream_with_target(
         &settings,
         &prompt,
         &[],
         "",
         None,
-        words,
+        merge_words,
         true,
         &cancel,
         &mut |_: &str| {},
@@ -244,7 +241,7 @@ fn the_lan_block_summary_pipeline_returns_one_text() {
             &[],
             "",
             None,
-            words,
+            merge_words,
             true,
             &cancel,
             &mut |_: &str| {},
@@ -256,6 +253,159 @@ fn the_lan_block_summary_pipeline_returns_one_text() {
     // merge sees the combined text. The wording itself is the model's job and
     // is deliberately not asserted here.
     assert!(!text.trim().is_empty(), "the merged summary was empty");
+}
+
+/// The summary word target against the real model: a 90-word target must not
+/// come back as a 300-word retelling, and the app-side trim must land at a
+/// finished sentence inside the 20% tolerance.
+#[test]
+#[ignore = "needs FOLIO_LAN_URL"]
+fn the_lan_summary_respects_the_word_target() {
+    let mut settings = lan_settings();
+    settings.temperature = 0.3;
+    let library = Library::sample();
+    let story = &library.stories[0];
+    let chapter = &story.chapters[0];
+    let fixture =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/assistant_chapter.txt");
+    let Ok(body) = std::fs::read_to_string(&fixture) else {
+        eprintln!("skipped: local fixture tests/assistant_chapter.txt is not in the repo");
+        return;
+    };
+    let passage = body.trim();
+    let prompt = summary_block_prompt(story, chapter, passage, 0, 1, &settings);
+    let reply = request_with_target(&settings, &prompt, &[], "", 90).expect("summary reply");
+    let (text, _) = complete_summary(&reply);
+    let raw_words = text.split_whitespace().count();
+    let (trimmed, changed) = trim_to_target(&text, 90);
+    let words = trimmed.split_whitespace().count();
+    println!("raw summary: {raw_words} words; trimmed: {words} words (changed: {changed})");
+    println!("SUMMARY: {trimmed}");
+    assert!(!trimmed.trim().is_empty(), "the summary was empty: {reply}");
+    assert!(
+        words <= 90 + 90 / 5,
+        "a 90-word target must land within +20%, got {words}: {trimmed}"
+    );
+    assert!(
+        trimmed.ends_with('.') || trimmed.ends_with('!') || trimmed.ends_with('?'),
+        "the trim must end on a sentence: {trimmed}"
+    );
+}
+
+/// The rewrite instruction against the real model. The passage used in the
+/// failed acceptance run must no longer come back word for word.
+#[test]
+#[ignore = "needs FOLIO_LAN_URL"]
+fn the_lan_rewrite_does_not_echo_the_passage() {
+    let settings = lan_settings();
+    let library = Library::sample();
+    let story = &library.stories[0];
+    let chapter = &story.chapters[1];
+    let passage = "The sea was very beautiful in the last light, and Mira stood at the window for a long time without moving.";
+    let prompt = chat_prompt(story, chapter, Action::Rewrite, "", passage, &settings);
+    let reply = request_with_target(&settings, &prompt, &[], "", 0).expect("rewrite reply");
+    let reply = reply.trim();
+    println!("rewrite: {reply}");
+    assert!(!reply.is_empty(), "the rewrite was empty");
+    let same = reply
+        .split_whitespace()
+        .map(|word| {
+            word.trim_matches(|ch: char| !ch.is_alphanumeric())
+                .to_lowercase()
+        })
+        .zip(passage.split_whitespace().map(|word| {
+            word.trim_matches(|ch: char| !ch.is_alphanumeric())
+                .to_lowercase()
+        }))
+        .filter(|(a, b)| a == b)
+        .count();
+    let longest = reply
+        .split_whitespace()
+        .count()
+        .max(passage.split_whitespace().count());
+    assert!(
+        same * 100 / longest < 95,
+        "the model repeated the passage: {reply}"
+    );
+}
+
+/// The merge pass against the real model: the combined block summaries must
+/// become one text near the whole-chapter target, not a second retelling.
+#[test]
+#[ignore = "needs FOLIO_LAN_URL"]
+fn the_lan_merge_stays_near_its_target() {
+    let mut settings = lan_settings();
+    settings.temperature = 0.2;
+    let fixture =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/assistant_chapter.txt");
+    let body = std::fs::read_to_string(&fixture).expect("the chapter fixture");
+    let parts: Vec<&str> = body
+        .trim()
+        .split("\n\n")
+        .filter(|part| !part.trim().is_empty())
+        .take(8)
+        .collect();
+    let combined = parts.join("\n\n");
+    let target = DEFAULT_SUMMARY_MERGE_WORDS;
+    let prompt = summary_merge_prompt(&combined, target);
+    let reply = request_with_target(&settings, &prompt, &[], "", target).expect("merge reply");
+    let (text, _) = complete_summary(&reply);
+    let (trimmed, changed) = trim_to_target(&text, target);
+    let words = trimmed.split_whitespace().count();
+    println!(
+        "combined: {} words; merge raw: {} words; trimmed: {words} words (changed: {changed})",
+        combined.split_whitespace().count(),
+        text.split_whitespace().count()
+    );
+    println!("MERGED: {trimmed}");
+    assert!(words > 0, "the merge was empty: {reply}");
+    assert!(
+        words <= target as usize + target as usize / 5,
+        "a {target}-word target must land within +20%, got {words}"
+    );
+}
+
+/// The exact case from the author's feedback: an explicitly requested new
+/// character must become an INVENT proposal with a real name and invented
+/// facts, not a LORE block full of MISSING.
+#[test]
+#[ignore = "needs FOLIO_LAN_URL"]
+fn the_lan_assistant_invents_a_requested_character() {
+    let settings = lan_settings();
+    let library = Library::sample();
+    let story = &library.stories[0];
+    let chapter = &story.chapters[1];
+    let ask = "Invent a name, personality and appearance for a new character: Tim's mother. \
+               She is female and old enough to be the mother of 16-year-old Tim. \
+               Add her to the lorebook as a new entry.";
+    assert!(asks_for_invention(ask));
+    let prompt = chat_prompt(story, chapter, Action::Brainstorm, ask, "", &settings);
+    let reply = request_with_target(&settings, &prompt, &[], "", 300).expect("invent reply");
+    println!("ASSISTANT REPLY:\n{reply}");
+    let parsed = parse_assistant_reply(&reply, story, ask);
+    let Some(AssistantAction::Invent(suggestion)) = parsed.action else {
+        panic!("expected an INVENT block, got {:?}\n{reply}", parsed.action);
+    };
+    assert!(suggestion.invented);
+    assert_eq!(suggestion.target, None);
+    let name = suggestion.name.trim();
+    assert!(name.chars().count() >= 2, "the name was empty: {reply}");
+    let lower = name.to_lowercase();
+    assert!(
+        !lower.contains("mother") && !lower.contains("mutter") && !lower.contains("tim"),
+        "the model used the relation as the name: {name}"
+    );
+    let words = suggestion.text.split_whitespace().count();
+    assert!(
+        words >= 20,
+        "the invented entry is too thin ({words} words): {}",
+        suggestion.text
+    );
+    assert!(
+        !parsed.prose.contains("[["),
+        "markers leaked: {}",
+        parsed.prose
+    );
 }
 
 #[test]

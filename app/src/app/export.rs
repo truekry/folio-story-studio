@@ -25,7 +25,7 @@ impl FolioApp {
                     .map(|story| story.title.clone())
                     .unwrap_or_default()
             });
-        self.export_open = true;
+        self.open_tab(Tab::Export);
     }
 
     /// The name the files are written under: what the author typed, or the

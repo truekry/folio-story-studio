@@ -1,14 +1,34 @@
-//! The right desk: AI chips, brainstorm chat and the lorebook.
+//! The right side panel: AI chips, brainstorm chat, the lorebook and the
+//! full-page views (settings, summary, find, export, prompts, deleted).
 
 use super::*;
 
+/// The heading of a full view in the side panel. Returns true when the close
+/// cross was pressed.
+fn panel_head(ui: &mut Ui, title: &str) -> bool {
+    let mut close = false;
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(title).size(13.0).strong().color(C::ink()));
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if ghost(ui, "×").on_hover_text("Close this panel").clicked() {
+                close = true;
+            }
+        });
+    });
+    ui.separator();
+    close
+}
+
 impl FolioApp {
     pub(crate) fn ui_right(&mut self, ctx: &egui::Context) {
-        let mut open = true;
-        let mut tab = self.right_tab;
-        egui::SidePanel::right("desk")
-            .exact_width(378.0)
-            .resizable(false)
+        let mut close = false;
+        let screen = ctx.screen_rect();
+        let (min_width, max_width) = desk_width_range(screen.width());
+        let wanted = self.desk_width.clamp(min_width, max_width);
+        let response = egui::SidePanel::right("desk")
+            .resizable(true)
+            .default_width(wanted)
+            .width_range(min_width..=max_width)
             .frame(
                 Frame::NONE
                     .fill(C::panel())
@@ -23,77 +43,51 @@ impl FolioApp {
                     }),
             )
             .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    // Leave room for the Hide link and both gaps, or the row
-                    // widens the panel and the cards run into the window edge.
-                    let gap = ui.spacing().item_spacing.x;
-                    let width = ((ui.available_width() - 46.0 - 2.0 * gap) / 2.0).max(60.0);
-                    if ui
-                        .add_sized(
-                            [width, 30.0],
-                            Button::new(
-                                RichText::new("AI partner")
-                                    .size(12.0)
-                                    .color(if tab == Tab::Ai { C::ink() } else { C::muted() })
-                                    .strong(),
-                            )
-                            .fill(if tab == Tab::Ai {
-                                C::card()
-                            } else {
-                                Color32::TRANSPARENT
-                            })
-                            .stroke(if tab == Tab::Ai {
-                                Stroke::new(1.0_f32, C::line())
-                            } else {
-                                Stroke::NONE
-                            })
-                            .corner_radius(8),
-                        )
-                        .clicked()
-                    {
-                        tab = Tab::Ai;
-                    }
-                    if ui
-                        .add_sized(
-                            [width, 30.0],
-                            Button::new(
-                                RichText::new("Lorebook")
-                                    .size(12.0)
-                                    .color(if tab == Tab::Lore {
-                                        C::ink()
-                                    } else {
-                                        C::muted()
-                                    })
-                                    .strong(),
-                            )
-                            .fill(if tab == Tab::Lore {
-                                C::card()
-                            } else {
-                                Color32::TRANSPARENT
-                            })
-                            .stroke(if tab == Tab::Lore {
-                                Stroke::new(1.0_f32, C::line())
-                            } else {
-                                Stroke::NONE
-                            })
-                            .corner_radius(8),
-                        )
-                        .clicked()
-                    {
-                        tab = Tab::Lore;
-                    }
-                    if ghost(ui, "Hide").clicked() {
-                        open = false;
-                    }
-                });
+                let tab = self.right_tab;
+                if panel_head(ui, tab.title()) {
+                    close = true;
+                }
                 ui.add_space(6.0);
                 match tab {
                     Tab::Ai => self.ui_ai_tab(ui),
                     Tab::Lore => self.ui_lore_tab(ui),
+                    Tab::Settings => self.ui_settings(ui),
+                    Tab::Prompts => self.ui_prompts(ui),
+                    Tab::Summary => self.ui_summary(ui),
+                    Tab::Find => self.ui_find(ui),
+                    Tab::Export => self.ui_export(ui),
+                    Tab::Trash => self.ui_trash(ui),
                 }
             });
-        self.right_tab = tab;
-        if !open {
+        let shown = response.response.rect.width();
+        let at_edge = ctx.input(|input| {
+            input
+                .pointer
+                .interact_pos()
+                .is_some_and(|pos| (pos.x - response.response.rect.left()).abs() <= 14.0)
+        });
+        if at_edge && ctx.input(|input| input.pointer.primary_down()) {
+            // The author is dragging the edge: remember the width they picked,
+            // not the width this window happened to allow.
+            self.desk_width = shown.clamp(DESK_MIN_WIDTH, DESK_MAX_WIDTH);
+        } else if self.desk_width > shown + 0.5 && max_width < DESK_MAX_WIDTH {
+            // The window is too narrow for the chosen width. Keep it for later
+            // instead of letting egui overwrite its memory with the clamped one.
+            let rect = egui::Rect::from_min_max(
+                egui::pos2(
+                    response.response.rect.right() - self.desk_width,
+                    response.response.rect.top(),
+                ),
+                response.response.rect.max,
+            );
+            ctx.data_mut(|data| {
+                data.insert_persisted(
+                    Id::new("desk"),
+                    egui::containers::panel::PanelState { rect },
+                )
+            });
+        }
+        if close {
             self.right_open = false;
         }
     }
@@ -109,12 +103,20 @@ impl FolioApp {
         let memory = chapter.chat_summary.clone();
         let story_id = story.key.clone();
         let chapter_id = chapter.key.clone();
+        let chapter_title = chapter.title.clone();
+        let proposal = self.assistant_proposal.clone();
+        let proposal_here = proposal
+            .as_ref()
+            .is_some_and(|offer| offer.story_id == story_id && offer.chapter_id == chapter_id);
         let has_chat = !messages.is_empty() || !memory.trim().is_empty();
         let window = self.library.settings.recent_window();
         let position = self.active_chapter;
         let recent_summaries = story.recent_summaries(position, window).len();
         // Only older chapters with a summary actually reach the recap block.
-        let recap_chapters = story.chapters[..story.recent_start(position, window)]
+        let recap_start = story
+            .recent_start(position, window)
+            .min(story.chapters.len());
+        let recap_chapters = story.chapters[..recap_start]
             .iter()
             .filter(|chapter| chapter.is_summarized())
             .count();
@@ -168,7 +170,7 @@ impl FolioApp {
         let mut want_clear = false;
 
         ui.horizontal(|ui| {
-            ui.label(caps("Brainstorm", C::muted()));
+            ui.label(caps("Assistant", C::muted()));
             let rest = ui.available_width();
             ui.allocate_ui_with_layout(
                 Vec2::new(rest, 16.0),
@@ -182,7 +184,7 @@ impl FolioApp {
                     if has_chat && !busy {
                         if ghost(ui, "Clear chat")
                             .on_hover_text(
-                                "Remove every message from this chapter's brainstorm and start fresh",
+                                "Remove every message from this chapter's conversation and start fresh",
                             )
                             .clicked()
                         {
@@ -194,7 +196,7 @@ impl FolioApp {
         });
         ui.label(
             RichText::new(
-                "A separate conversation. It sees this chapter, its summary and the lorebook — not your draft.",
+                "A working partner with this chapter open. It can read the page, refresh the chapter summary, or prepare lore facts for your approval — its draft stays out of this conversation.",
             )
             .size(9.5)
             .color(C::muted()),
@@ -204,7 +206,7 @@ impl FolioApp {
         Frame::NONE
             .fill(C::card())
             .stroke(Stroke::new(1.0_f32, C::line()))
-            .corner_radius(11)
+            .corner_radius(theme::radius(11))
             .inner_margin(Margin::symmetric(12, 9))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
@@ -252,6 +254,7 @@ impl FolioApp {
         // same button row, so both bars line up across the window.
         let mut send = false;
         let mut stop_chat = false;
+        let mut proposal_choice: Option<AssistantChoice> = None;
         TopBottomPanel::bottom(Id::new("brainstorm-input"))
             .frame(Frame::NONE)
             .show_inside(ui, |ui| {
@@ -259,7 +262,7 @@ impl FolioApp {
                 Frame::NONE
                     .fill(C::card())
                     .stroke(Stroke::new(1.0_f32, C::line()))
-                    .corner_radius(12)
+                    .corner_radius(theme::radius(12))
                     .inner_margin(Margin::symmetric(14, 9))
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
@@ -302,7 +305,7 @@ impl FolioApp {
                                     )
                                     .fill(C::accent_soft())
                                     .stroke(Stroke::new(1.0_f32, C::accent_soft()))
-                                    .corner_radius(8)
+                                    .corner_radius(theme::radius(8))
                                     .min_size(Vec2::new(62.0, 28.0));
                                     if ui.add(stop).clicked() {
                                         stop_chat = true;
@@ -317,7 +320,7 @@ impl FolioApp {
                                     )
                                     .fill(C::accent())
                                     .stroke(Stroke::NONE)
-                                    .corner_radius(8)
+                                    .corner_radius(theme::radius(8))
                                     .min_size(Vec2::new(62.0, 28.0));
                                     if ui.add_enabled(can_send, button).clicked() {
                                         send = true;
@@ -334,7 +337,7 @@ impl FolioApp {
         let user_scrolled =
             ui.input(|i| i.raw_scroll_delta.y.abs() > 0.5 || i.smooth_scroll_delta.y.abs() > 0.5);
         let follow_chat = self.chat_follow && !user_scrolled;
-        let stick_chat = self.scroll_chat || (streaming_chat && follow_chat);
+        let stick_chat = self.scroll_chat || ((streaming_chat || proposal_here) && follow_chat);
         self.scroll_chat = false;
         let chat_out = ScrollArea::vertical()
             .id_salt("ai-chat")
@@ -380,7 +383,7 @@ impl FolioApp {
                         } else {
                             Stroke::new(1.0_f32, C::line())
                         })
-                        .corner_radius(11)
+                        .corner_radius(theme::radius(11))
                         .inner_margin(Margin::symmetric(11, 8))
                         .show(ui, |ui| {
                             ui.set_width(ui.available_width());
@@ -421,7 +424,7 @@ impl FolioApp {
                     Frame::NONE
                         .fill(C::card())
                         .stroke(Stroke::new(1.0_f32, C::line()))
-                        .corner_radius(11)
+                        .corner_radius(theme::radius(11))
                         .inner_margin(Margin::symmetric(11, 8))
                         .show(ui, |ui| {
                             ui.set_width(ui.available_width());
@@ -456,7 +459,7 @@ impl FolioApp {
                     Frame::NONE
                         .fill(C::card())
                         .stroke(Stroke::new(1.0_f32, C::line()))
-                        .corner_radius(11)
+                        .corner_radius(theme::radius(11))
                         .inner_margin(Margin::symmetric(11, 9))
                         .show(ui, |ui| {
                             ui.set_width(ui.available_width());
@@ -471,8 +474,16 @@ impl FolioApp {
                             });
                         });
                 }
+                if proposal_here {
+                    if let Some(proposal) = &proposal {
+                        if let Some(choice) = assistant_proposal_card(ui, proposal, &chapter_title)
+                        {
+                            proposal_choice = Some(choice);
+                        }
+                    }
+                }
             });
-        if streaming_chat {
+        if streaming_chat || proposal_here {
             let at_bottom = chat_out.state.offset.y + chat_out.inner_rect.height()
                 >= chat_out.content_size.y - 16.0;
             if user_scrolled || at_bottom {
@@ -480,6 +491,12 @@ impl FolioApp {
             }
         }
 
+        match proposal_choice {
+            Some(AssistantChoice::Accept) => self.accept_assistant_proposal(),
+            Some(AssistantChoice::Deny) => self.assistant_proposal = None,
+            Some(AssistantChoice::Retry) => self.retry_assistant_proposal(),
+            None => {}
+        }
         if send {
             self.send_brainstorm();
         }
@@ -573,7 +590,7 @@ impl FolioApp {
             Frame::NONE
                 .fill(C::card())
                 .stroke(Stroke::new(1.0_f32, C::line()))
-                .corner_radius(11)
+                .corner_radius(theme::radius(11))
                 .inner_margin(Margin::symmetric(13, 15))
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());

@@ -14,8 +14,6 @@ pub(crate) struct Config {
     pub version: u64,
     #[serde(default)]
     pub settings: AiSettings,
-    #[serde(default = "yes")]
-    pub show_summary: bool,
     #[serde(default)]
     pub writing_font: String,
     #[serde(default = "default_writing_size")]
@@ -24,6 +22,10 @@ pub(crate) struct Config {
     pub export_dir: String,
     #[serde(default = "yes")]
     pub export_pdf: bool,
+    /// The look chosen in the settings. Older config files have none and open
+    /// in Paper.
+    #[serde(default)]
+    pub look: crate::theme::Look,
     /// The open story by key, not by position.
     #[serde(default)]
     pub active_story_key: String,
@@ -34,11 +36,11 @@ impl Config {
         Self {
             version: 1,
             settings: library.settings.clone(),
-            show_summary: library.show_summary,
             writing_font: library.writing_font.clone(),
             writing_size: library.writing_size,
             export_dir: library.export_dir.clone(),
             export_pdf: library.export_pdf,
+            look: library.look,
             active_story_key: library
                 .stories
                 .get(library.active_story)
@@ -56,11 +58,11 @@ impl Config {
             stories,
             settings: self.settings,
             active_story,
-            show_summary: self.show_summary,
             writing_font: self.writing_font,
             writing_size: self.writing_size,
             export_dir: self.export_dir,
             export_pdf: self.export_pdf,
+            look: self.look,
         };
         normalize(&mut library);
         library
@@ -94,7 +96,7 @@ impl Store {
         let mut last_config = None;
 
         let config = if config_path.exists() {
-            match fs::read_to_string(&config_path) {
+            match read_text(&config_path) {
                 Ok(text) => {
                     let hash = content_hash(&text);
                     match serde_json::from_str::<Config>(&text) {
@@ -127,7 +129,7 @@ impl Store {
 
         // No usable config, but an old library: migrate it now.
         if config.is_none() && legacy_path.exists() {
-            match fs::read_to_string(&legacy_path)
+            match read_text(&legacy_path)
                 .map_err(|error| error.to_string())
                 .and_then(|text| {
                     serde_json::from_str::<Library>(&text).map_err(|error| error.to_string())
@@ -322,6 +324,19 @@ fn story_path(stories_dir: &Path, key: &str) -> PathBuf {
     stories_dir.join(format!("{key}.json"))
 }
 
+/// Read a JSON file the way Windows editors write it: an external tool may
+/// prepend a UTF-8 byte-order mark, which `serde_json` rejects. The file itself
+/// is never rewritten here; only the text handed to the parser is trimmed.
+fn read_text(path: &Path) -> std::io::Result<String> {
+    let text = fs::read_to_string(path)?;
+    Ok(strip_bom(&text).to_string())
+}
+
+/// A leading UTF-8 BOM is not JSON and not part of the document.
+pub(crate) fn strip_bom(text: &str) -> &str {
+    text.strip_prefix('\u{feff}').unwrap_or(text)
+}
+
 fn normalize(library: &mut Library) {
     library.active_story = library
         .active_story
@@ -350,7 +365,7 @@ fn read_stories(
         if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
             continue;
         }
-        let text = match fs::read_to_string(&path) {
+        let text = match read_text(&path) {
             Ok(text) => text,
             Err(error) => {
                 report.warnings.push(format!(

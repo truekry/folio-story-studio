@@ -25,7 +25,7 @@ impl Action {
         }
     }
 
-    pub fn instruction(self, ask: &str, passage: &str, prompts: &PromptSettings) -> String {
+    pub fn instruction(self, ask: &str, prompts: &PromptSettings) -> String {
         let kind = self.kind();
         let mut text = kind.instruction(prompts);
         // The brainstorm prompt is the partner's role. The typed question is
@@ -38,16 +38,6 @@ impl Action {
                     "\n\nAUTHOR'S QUESTION:\n{ask}\n\nAnswer as a partner: suggest and explain, do not write the scene."
                 ));
             }
-        }
-        // The passage is not part of the editable text: the author may rewrite
-        // the instruction without losing the words it must work on.
-        if matches!(self, Self::Rewrite | Self::Elaborate) {
-            let shown = if passage.trim().is_empty() {
-                "(the last paragraph of the chapter)"
-            } else {
-                passage.trim()
-            };
-            text.push_str(&format!("\n\nPASSAGE:\n{shown}"));
         }
         text
     }
@@ -80,7 +70,7 @@ impl PromptKind {
             Self::Continue => "Continue the scene",
             Self::Rewrite => "Rewrite a passage",
             Self::Elaborate => "Elaborate a passage",
-            Self::Brainstorm => "Brainstorm with the author",
+            Self::Brainstorm => "Assistant chat",
         }
     }
 
@@ -89,10 +79,10 @@ impl PromptKind {
     pub fn default_instruction(self) -> &'static str {
         match self {
             Self::Summary => "Summarize the passage below in one factual, past-tense, third-person paragraph. Keep every name, number, date, fact and open question exactly as the passage gives it. Do not add anything, do not resolve anything it leaves open, and do not interpret or comment on it. Write only the summary, with no preamble and no headings.",
-            Self::Continue => "Continue the current chapter from where it stops. Match the existing voice, keep every established fact, and end on a small turn or question rather than a conclusion. Do not summarize what came before and do not use a heading. Return only the prose.",
-            Self::Rewrite => "Rewrite the passage below so it is sharper and more concrete, keeping the same events, facts and point of view. Return only the rewritten passage, with no preamble and no commentary.",
-            Self::Elaborate => "Elaborate the passage below into a fuller scene. Keep every event, fact and point of view exactly as it is; add concrete sensory detail, small actions and the beat of the moment. Do not invent a new plot turn and do not summarize. Aim for roughly twice the length of the passage, and return only the prose.",
-            Self::Brainstorm => "Answer as the author's writing partner, in your own voice and addressed to the author. Suggest what could happen next and why it would work, point out what is missing, or weigh the options — talk it through with them. Do not continue, rewrite or draft the scene, and do not return prose from the chapter. Keep it conversational and short.",
+            Self::Continue => "Continue this chapter with the next few paragraphs of prose, starting after its last line. Stay in the same place, time and scene; do not jump to a new location. Match the voice and tense. Begin with the prose immediately: no questions, no options, no explanation, no headings. End on a turn or question.",
+            Self::Rewrite => "Replace the passage in CONTEXT with a sharper, more concrete version. Change every sentence; do not repeat the original wording. Keep the same events, facts and point of view. Return only the new passage: no explanation and no commentary.",
+            Self::Elaborate => "Expand the passage in CONTEXT into a fuller scene of about twice the length. Keep every event and every fact, including the opening. Add sensory detail and small actions; do not summarize, shorten or drop sentences.",
+            Self::Brainstorm => "Answer as the author's assistant for this chapter. Answer the question first, briefly. When asked to add, update, summarize, record or explicitly invent something, use the action rules below. Be honest: name what is weak instead of praising. Do not continue, rewrite or draft the scene.",
         }
     }
 
@@ -161,8 +151,8 @@ impl PromptKind {
     }
 
     /// The text actually sent: the author's own instruction, or the default,
-    /// plus one sentence about the length. The length line is what keeps a
-    /// talkative local model on the point instead of letting it wander.
+    /// plus the length. Short and binding: local models treat a polite "aim
+    /// for" as a suggestion, but obey a hard limit.
     pub fn instruction(self, prompts: &PromptSettings) -> String {
         let base = self.base_text(prompts);
         let base = base.trim();
@@ -170,8 +160,12 @@ impl PromptKind {
         if words == 0 {
             return base.to_string();
         }
-        format!(
-            "{base}\n\nLength: about {words} words. Keep to what matters, and always finish your last sentence."
-        )
+        format!("{base}\n\n{}", length_line(words))
     }
+}
+
+/// The one sentence that carries a word target. Shared by the prompt editor and
+/// the summary merge so both speak with the same voice.
+pub(crate) fn length_line(words: u32) -> String {
+    format!("Answer in at most {words} words. Do not exceed {words}.")
 }

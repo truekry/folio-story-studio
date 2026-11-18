@@ -21,6 +21,11 @@ pub struct LoreEntry {
     pub description: String,
     #[serde(default)]
     pub pinned: bool,
+    /// True when the entry was invented by the assistant at the author's
+    /// request rather than taken from a chapter. The lorebook marks it so the
+    /// author can tell canon from invention; it still travels as story memory.
+    #[serde(default)]
+    pub invented: bool,
 }
 
 pub(crate) fn default_category() -> String {

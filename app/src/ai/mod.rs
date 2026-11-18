@@ -3,6 +3,7 @@
 //! The module is split by task:
 //!
 //! - [`kind`]: the actions and the editable prompts behind them
+//! - [`assistant`]: the two actions the chat can propose
 //! - [`prompt`]: what the partner is told about story, chapter and passage
 //! - [`proofread`]: the paragraph-by-paragraph spelling and grammar pass
 //! - [`lore`]: lore suggestions read out of a reply
@@ -23,6 +24,7 @@ use std::io::{BufRead, BufReader};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+mod assistant;
 mod budget;
 mod demo;
 mod endpoint;
@@ -34,6 +36,7 @@ mod reply;
 mod stream;
 mod summarize;
 
+pub use assistant::*;
 pub use budget::*;
 pub use demo::*;
 pub use endpoint::*;

@@ -138,6 +138,7 @@ impl FolioApp {
                         entry.triggers = draft.triggers;
                         entry.description = draft.description;
                         entry.pinned = draft.pinned;
+                        entry.invented = draft.invented;
                     }
                 } else if let Some((key, number)) = new_lore {
                     story.lore.push(LoreEntry {
@@ -148,6 +149,7 @@ impl FolioApp {
                         triggers: draft.triggers,
                         description: draft.description,
                         pinned: draft.pinned,
+                        invented: draft.invented,
                     });
                     story.next_lore = number.saturating_add(1);
                 }
@@ -238,7 +240,7 @@ impl FolioApp {
                 if let Some(entry) = &current {
                     Frame::NONE
                         .fill(C::summary_bg())
-                        .corner_radius(10)
+                        .corner_radius(theme::radius(10))
                         .inner_margin(Margin::symmetric(10, 8))
                         .show(ui, |ui| {
                             ui.set_width(ui.available_width());
@@ -381,6 +383,7 @@ impl FolioApp {
                         triggers: draft.triggers.trim().to_string(),
                         description: text,
                         pinned: draft.pinned,
+                        invented: false,
                     });
                     story.next_lore = number.saturating_add(1);
                 }

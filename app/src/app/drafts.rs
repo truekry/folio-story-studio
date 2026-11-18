@@ -4,6 +4,12 @@ use super::*;
 
 impl FolioApp {
     pub(crate) fn run_action(&mut self, action: Action, ask: String) {
+        self.run_action_inner(action, ask, true);
+    }
+
+    /// `record_ask` is false for a retry: the question is already in the chat,
+    /// so it must not be added a second time.
+    pub(crate) fn run_action_inner(&mut self, action: Action, ask: String, record_ask: bool) {
         if self.job.is_some() {
             self.notify("Wait for the current reply to finish first.", false);
             return;
@@ -66,6 +72,47 @@ impl FolioApp {
                 body_chars,
             )
         };
+        if action == Action::Brainstorm && ai::asks_for_secrets(&ask) {
+            // Answer locally: no request, no key, no chance for a model to
+            // dodge the question or invent an "update".
+            self.clear_assistant();
+            if record_ask && !ask.trim().is_empty() {
+                if let Some(chapter) = self
+                    .library
+                    .story_mut(&story_id)
+                    .and_then(|story| story.chapter_mut(&chapter_id))
+                {
+                    chapter.chat.push(ChatMessage {
+                        role: "user".to_string(),
+                        text: ask.trim().to_string(),
+                        demo: false,
+                    });
+                }
+            }
+            if let Some(chapter) = self
+                .library
+                .story_mut(&story_id)
+                .and_then(|story| story.chapter_mut(&chapter_id))
+            {
+                chapter.chat.push(ChatMessage {
+                    role: "assistant".to_string(),
+                    text: ai::SECRET_REFUSAL.to_string(),
+                    demo: false,
+                });
+            }
+            self.scroll_chat = true;
+            self.chat_follow = true;
+            self.mark_dirty();
+            return;
+        }
+        if action == Action::Brainstorm {
+            // The chat is the assistant now: remember the question for a retry
+            // and drop any proposal the new question replaces.
+            self.assistant_ask = ask.trim().to_string();
+            self.assistant_proposal = None;
+        } else {
+            self.assistant_ask.clear();
+        }
         let prose = action.is_prose();
         // Prose gets its own draft block. The brainstorm conversation is a
         // separate session and never feeds a continuation.
@@ -103,7 +150,7 @@ impl FolioApp {
                 .map(|chapter| (chapter.chat.clone(), chapter.chat_summary.clone()))
                 .unwrap_or_default()
         };
-        if action == Action::Brainstorm && !ask.trim().is_empty() {
+        if action == Action::Brainstorm && record_ask && !ask.trim().is_empty() {
             if let Some(chapter) = self
                 .library
                 .story_mut(&story_id)
@@ -151,6 +198,7 @@ impl FolioApp {
                 story_id: story_id.clone(),
                 chapter_id: chapter_id.clone(),
                 draft,
+                guard_attempt: 0,
             });
             self.draft_error = None;
             self.draft_follow = true;
@@ -183,10 +231,25 @@ impl FolioApp {
             }
             self.scroll_chat = true;
             self.mark_dirty();
+            self.assistant_ask.clear();
             return;
         }
         let prompt = prompt.unwrap_or_default();
-        let settings = self.library.settings.clone();
+        // The second try after an echo: name the failure in the request itself.
+        let nudge = std::mem::take(&mut self.rewrite_nudge);
+        let prompt = if action == Action::Rewrite && nudge {
+            format!(
+                "{prompt}\n\nREWRITE AGAIN: the previous answer repeated the passage almost word for word. Change every sentence and every clause. Keep the facts, names and point of view, but do not copy the original wording."
+            )
+        } else {
+            prompt
+        };
+        let mut settings = self.library.settings.clone();
+        // Editing an existing passage is a faithful task, not a lively one:
+        // keep a hot author setting from turning the rewrite into new prose.
+        if matches!(action, Action::Rewrite | Action::Elaborate) {
+            settings.temperature = settings.temperature.min(0.5);
+        }
         // Only Continue and Rewrite carry a word target. A brainstorm answer
         // ends when the question has been answered.
         let words = action.kind().words(&settings.prompts);
@@ -204,13 +267,110 @@ impl FolioApp {
     }
 
     /// Send the question in the field. The panel has no other way in, so an
-    /// empty field sends nothing.
+    /// empty field sends nothing. A running reply keeps the text in the field,
+    /// so a question typed too early is not silently lost.
     pub(crate) fn send_brainstorm(&mut self) {
         let Some(text) = brainstorm_send_text(&self.ai_input) else {
             return;
         };
+        if self.job.is_some() {
+            self.notify(
+                "Wait for the current reply to finish first — your question is still in the field.",
+                false,
+            );
+            return;
+        }
         self.ai_input.clear();
         self.run_action(Action::Brainstorm, text);
+    }
+
+    /// The author accepted the assistant's offer. A summary starts the normal
+    /// summary run; a lore proposal is written into the lorebook now.
+    pub(crate) fn accept_assistant_proposal(&mut self) {
+        let Some(proposal) = self.assistant_proposal.take() else {
+            return;
+        };
+        crate::crash::note("accept assistant proposal");
+        match proposal.action {
+            ai::AssistantAction::Summary => {
+                let position = self
+                    .library
+                    .stories
+                    .iter()
+                    .position(|story| story.key == proposal.story_id)
+                    .and_then(|story_index| {
+                        self.library.stories[story_index]
+                            .chapters
+                            .iter()
+                            .position(|chapter| chapter.key == proposal.chapter_id)
+                            .map(|chapter_index| (story_index, chapter_index))
+                    });
+                let Some((story_index, chapter_index)) = position else {
+                    self.notify("That chapter is no longer here.", true);
+                    return;
+                };
+                if story_index == self.active_story && chapter_index == self.active_chapter {
+                    self.open_tab(Tab::Summary);
+                }
+                self.summarize_chapter(story_index, chapter_index);
+            }
+            ai::AssistantAction::Lore(suggestion) => {
+                let outcome = self
+                    .library
+                    .story_mut(&proposal.story_id)
+                    .and_then(|story| ai::apply_lore_suggestion(story, &suggestion));
+                match outcome {
+                    Some((name, true)) => {
+                        self.mark_dirty();
+                        self.notify(format!("New lore entry “{name}” saved."), false);
+                    }
+                    Some((name, false)) => {
+                        self.mark_dirty();
+                        self.notify(format!("“{name}” in the lorebook was updated."), false);
+                    }
+                    None => self.notify("The proposal had no entry name or no usable text.", true),
+                }
+            }
+            ai::AssistantAction::Invent(suggestion) => {
+                let outcome = self
+                    .library
+                    .story_mut(&proposal.story_id)
+                    .and_then(|story| ai::apply_lore_suggestion(story, &suggestion));
+                match outcome {
+                    Some((name, true)) => {
+                        self.mark_dirty();
+                        self.notify(
+                            format!("New invented lore entry “{name}” saved — marked as invented."),
+                            false,
+                        );
+                    }
+                    Some((name, false)) => {
+                        self.mark_dirty();
+                        self.notify(format!("Invented facts were added to “{name}”."), false);
+                    }
+                    None => {
+                        self.notify("The invented proposal had no name or no usable text.", true)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Ask the same question again, without adding it to the chat twice.
+    pub(crate) fn retry_assistant_proposal(&mut self) {
+        let Some(proposal) = self.assistant_proposal.take() else {
+            return;
+        };
+        if proposal.story_id != self.story_id()
+            || self
+                .library
+                .story(&proposal.story_id)
+                .and_then(|story| story.chapter(&proposal.chapter_id))
+                .is_none()
+        {
+            return;
+        }
+        self.run_action_inner(Action::Brainstorm, proposal.ask, false);
     }
 
     /// Read a marked passage against the lorebook. The reply is parsed into a
@@ -300,6 +460,11 @@ impl FolioApp {
             return;
         };
         let replaces = matches!(draft.action.as_str(), "rewrite" | "elaborate");
+        crate::crash::note(if replaces {
+            "accept rewrite draft"
+        } else {
+            "accept continue draft"
+        });
         let outcome = (|| -> Result<(), String> {
             let chapter = self
                 .library
@@ -453,6 +618,10 @@ impl FolioApp {
         if let Some(job) = self.job.as_ref() {
             job.cancel.store(true, Ordering::Relaxed);
         }
+        if !proofread {
+            self.assistant_ask.clear();
+            self.assistant_proposal = None;
+        }
         self.notify(
             if proofread {
                 "Stopping the check — the chapter stays unchanged."
@@ -547,11 +716,7 @@ impl FolioApp {
                 let _ = tx.send(StreamEvent::Done { truncated: false });
                 return;
             }
-            let mut chars: Vec<char> = body.chars().collect();
-            for (range, text) in corrections.iter().rev() {
-                chars.splice(range.clone(), text.chars());
-            }
-            let corrected: String = chars.into_iter().collect();
+            let corrected = apply_corrections(&body, &corrections);
             let _ = tx.send(StreamEvent::Delta(corrected));
             let _ = tx.send(StreamEvent::Done { truncated: false });
         });
@@ -583,6 +748,7 @@ impl FolioApp {
             self.notify("Proofreading stopped — the chapter is unchanged.", false);
             return;
         }
+        crate::crash::note("apply proofread");
         let Some(chapter) = self
             .library
             .story_mut(&story_id)

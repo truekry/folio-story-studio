@@ -2,6 +2,7 @@
 
 mod ai;
 mod app;
+mod crash;
 mod folder;
 mod fonts;
 mod model;
@@ -19,8 +20,9 @@ fn main() -> eframe::Result<()> {
         println!("Usage: folio [--screenshot <file.png>]");
         println!("  --screenshot  draw the window for a moment, save a PNG, then exit");
         println!();
-        println!("Light or dark follows Windows. To force one of the two:");
-        println!("  FOLIO_THEME=dark   or   FOLIO_THEME=light");
+        println!("Look: White, Paper or Corpo, chosen in Settings.");
+        println!("For screenshots one can be forced:");
+        println!("  FOLIO_THEME=white   FOLIO_THEME=paper   FOLIO_THEME=corpo");
         return Ok(());
     }
 
@@ -45,6 +47,10 @@ fn main() -> eframe::Result<()> {
             viewport = viewport.with_window_level(egui::WindowLevel::AlwaysOnBottom);
         }
     }
+
+    // A release window has no console: without this, a panic would just close
+    // the app. The log lives next to the books and never contains settings.
+    crash::install(&model::data_dir());
 
     let options = eframe::NativeOptions {
         viewport,
@@ -132,7 +138,10 @@ mod tests {
         assert_eq!(icon.rgba.len(), 256 * 256 * 4);
         // The logo is an orange square with a white "F", not an empty canvas.
         assert!(icon.rgba.chunks(4).any(|pixel| pixel[..3] == [174, 82, 48]));
-        assert!(icon.rgba.chunks(4).any(|pixel| pixel[3] > 200 && pixel[0] > 240));
+        assert!(icon
+            .rgba
+            .chunks(4)
+            .any(|pixel| pixel[3] > 200 && pixel[0] > 240));
     }
 
     #[test]
@@ -146,8 +155,10 @@ mod tests {
             sizes.push(if width == 0 { 256 } else { width as usize });
         }
         for wanted in [16, 32, 48, 256] {
-            assert!(sizes.contains(&wanted), "the .ico needs a {wanted}px frame: {sizes:?}");
+            assert!(
+                sizes.contains(&wanted),
+                "the .ico needs a {wanted}px frame: {sizes:?}"
+            );
         }
     }
 }
-

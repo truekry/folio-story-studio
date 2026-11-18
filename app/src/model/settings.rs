@@ -16,6 +16,11 @@ pub struct AiSettings {
     pub max_tokens: u32,
     #[serde(default = "default_summary_window")]
     pub summary_window: usize,
+    /// How many words of the chapter one summary block holds. A block always
+    /// ends at a sentence, so it may run slightly over this limit rather than
+    /// cut a sentence in half.
+    #[serde(default = "default_summary_block_size")]
+    pub summary_block_size: usize,
     /// The context window the endpoint reported, in tokens. Zero means it did
     /// not say, and Folio sends its usual reply length.
     #[serde(default)]
@@ -40,8 +45,17 @@ pub struct PromptSetting {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct PromptSettings {
+    /// The order the prompt blocks are assembled in. Empty means the built-in
+    /// standard order; unknown or duplicated names are ignored when read.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub order: Vec<String>,
     #[serde(default)]
     pub summary: PromptSetting,
+    /// The word target for the one text the block summaries are merged into.
+    /// Blocks use `summary.words`; a missing value means the built-in default,
+    /// zero means no target.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merge_words: Option<u32>,
     #[serde(default, rename = "continue")]
     pub continuing: PromptSetting,
     #[serde(default)]
@@ -78,6 +92,13 @@ pub(crate) fn default_summary_window() -> usize {
     DEFAULT_SUMMARY_WINDOW
 }
 
+/// The default size of one summary block, in words of the source chapter.
+pub const DEFAULT_SUMMARY_BLOCK_SIZE: usize = 1200;
+
+pub(crate) fn default_summary_block_size() -> usize {
+    DEFAULT_SUMMARY_BLOCK_SIZE
+}
+
 impl Default for AiSettings {
     fn default() -> Self {
         Self {
@@ -87,6 +108,7 @@ impl Default for AiSettings {
             temperature: default_temperature(),
             max_tokens: default_max_tokens(),
             summary_window: default_summary_window(),
+            summary_block_size: default_summary_block_size(),
             context_limit: 0,
             prompts: PromptSettings::default(),
         }

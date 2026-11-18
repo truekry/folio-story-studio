@@ -9,10 +9,6 @@ pub struct Library {
     pub settings: AiSettings,
     #[serde(default)]
     pub active_story: usize,
-    /// Whether the chapter header carries the Summary… button. Off, the page
-    /// shows only the state dot; the window stays reachable from the top bar.
-    #[serde(default = "yes")]
-    pub show_summary: bool,
     /// Path of the installed font used for the story text. Empty means the
     /// system serif Folio finds by default; Folio ships no font of its own.
     #[serde(default)]
@@ -26,6 +22,10 @@ pub struct Library {
     /// True for one PDF of the whole story, false for one text file per chapter.
     #[serde(default = "yes")]
     pub export_pdf: bool,
+    /// The look last chosen in the settings. Older files have none and open in
+    /// Paper, the look 0.1.1 shipped.
+    #[serde(default)]
+    pub look: crate::theme::Look,
 }
 
 impl Library {
@@ -35,11 +35,11 @@ impl Library {
             stories: Vec::new(),
             settings: AiSettings::default(),
             active_story: 0,
-            show_summary: true,
             writing_font: String::new(),
             writing_size: DEFAULT_WRITING_SIZE,
             export_dir: String::new(),
             export_pdf: true,
+            look: crate::theme::Look::Paper,
         }
     }
 
@@ -48,11 +48,11 @@ impl Library {
             stories: vec![sample_lantern_coast(), sample_orchard()],
             settings: AiSettings::default(),
             active_story: 0,
-            show_summary: true,
             writing_font: String::new(),
             writing_size: DEFAULT_WRITING_SIZE,
             export_dir: String::new(),
             export_pdf: true,
+            look: crate::theme::Look::Paper,
         };
         ensure_library_keys(&mut library);
         library

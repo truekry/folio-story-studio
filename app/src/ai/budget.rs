@@ -30,10 +30,11 @@ pub(crate) fn history_tokens(history: &[ChatMessage]) -> usize {
         .sum()
 }
 
-/// How many reply tokens a word target needs. Prose runs at roughly 1.5 tokens
-/// per word; the rest is room to finish the sentence that the target made tight.
+/// How many reply tokens a word target needs. Two tokens per word is generous
+/// for English prose; the extra hundred is room to finish the last sentence
+/// without letting the reply run to several times the target.
 pub(crate) fn target_reply_tokens(words: u32) -> u32 {
-    words.saturating_mul(2).saturating_add(200)
+    words.saturating_mul(2).saturating_add(100)
 }
 
 /// How many reply tokens to ask for. A word target turns into a token wish;

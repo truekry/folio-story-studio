@@ -62,7 +62,7 @@ impl FolioApp {
         let mut chapter_menu: Option<(String, ChapterMenu)> = None;
 
         egui::SidePanel::left("library")
-            .exact_width(266.0)
+            .exact_width(LIBRARY_WIDTH)
             .resizable(false)
             .frame(
                 Frame::NONE
@@ -131,7 +131,7 @@ impl FolioApp {
                     ui.add_space(8.0);
                     Frame::NONE
                         .fill(C::sidebar_card())
-                        .corner_radius(11)
+                        .corner_radius(theme::radius(11))
                         .inner_margin(Margin::symmetric(11, 10))
                         .show(ui, |ui| {
                             ui.set_width(ui.available_width());
@@ -217,7 +217,7 @@ impl FolioApp {
                     ui.add_space(5.0);
                     Frame::NONE
                         .fill(C::sidebar_card())
-                        .corner_radius(11)
+                        .corner_radius(theme::radius(11))
                         .inner_margin(Margin::symmetric(11, 9))
                         .show(ui, |ui| {
                             ui.set_width(ui.available_width());

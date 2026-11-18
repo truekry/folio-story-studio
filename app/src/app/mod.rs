@@ -4,7 +4,7 @@
 //!
 //! - [`setup`]: startup, saving, switching stories and chapters, shortcuts
 //! - [`jobs`]: the one running AI job, its stream and the endpoint checks
-//! - [`drafts`]: prose drafts, proofreading, brainstorm chat and lore proposals
+//! - [`drafts`]: prose drafts, proofreading, the assistant chat and lore proposals
 //! - [`summaries`]: chapter summaries and the summary window
 //! - [`stories`]: creating, editing and deleting stories, chapters, lore; trash
 //! - [`export`]: PDF and per-chapter text export
@@ -12,7 +12,7 @@
 //! - [`text`]: pure text helpers (ranges, paragraphs, draft application)
 //! - [`widgets`]: shared buttons, cards and chips
 //! - [`copy`]: the sentences that explain what the AI sees
-//! - [`ui`]: top bar, library, editor, right desk and the dialogs
+//! - [`ui`]: top bar, library, editor, right panel and the dialogs
 //!
 //! The shared state (`FolioApp`, the small state enums, the job plumbing types)
 //! stays in this file; every submodule adds an `impl FolioApp` block with the
@@ -51,6 +51,9 @@ mod widgets;
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+mod testbench;
+
 // The free functions each module owns are re-exported here, so every other
 // module can call them without repeating a long import list.
 pub(crate) use copy::*;
@@ -60,10 +63,78 @@ pub(crate) use replace::*;
 pub(crate) use text::*;
 pub(crate) use widgets::*;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Tab {
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Tab {
     Ai,
     Lore,
+    Settings,
+    Prompts,
+    Summary,
+    Find,
+    Export,
+    Trash,
+}
+
+impl Tab {
+    /// The heading the side panel shows for a full view. The two desk tabs
+    /// keep their own row of buttons instead.
+    fn title(self) -> &'static str {
+        match self {
+            Tab::Ai => "AI partner",
+            Tab::Lore => "Lorebook",
+            Tab::Settings => "Settings",
+            Tab::Prompts => "Prompts",
+            Tab::Summary => "Chapter summary",
+            Tab::Find => "Find",
+            Tab::Export => "Export story",
+            Tab::Trash => "Recently deleted",
+        }
+    }
+}
+
+/// What pressing a top-bar button does: the same view again closes the panel,
+/// anything else shows the wanted view.
+pub(crate) fn next_tab(open: bool, current: Tab, wanted: Tab) -> (bool, Tab) {
+    if open && current == wanted {
+        (false, current)
+    } else {
+        (true, wanted)
+    }
+}
+
+impl FolioApp {
+    /// True when the side panel is open and shows this view.
+    pub(crate) fn showing(&self, tab: Tab) -> bool {
+        self.right_open && self.right_tab == tab
+    }
+
+    /// A top-bar button: show the view, or close the panel if it is already
+    /// the one on screen.
+    pub(crate) fn toggle_tab(&mut self, tab: Tab) {
+        let (open, which) = next_tab(self.right_open, self.right_tab, tab);
+        self.right_open = open;
+        self.right_tab = which;
+    }
+
+    /// Open a view without toggling. The desk tabs and the "Summary…" button
+    /// use this so a second press never hides what was just asked for.
+    pub(crate) fn open_tab(&mut self, tab: Tab) {
+        self.right_tab = tab;
+        self.right_open = true;
+    }
+
+    /// Close the panel only if this view is the one on screen.
+    pub(crate) fn close_tab(&mut self, tab: Tab) {
+        if self.showing(tab) {
+            self.right_open = false;
+        }
+    }
+
+    /// Drop a waiting assistant proposal and the question behind it.
+    pub(crate) fn clear_assistant(&mut self) {
+        self.assistant_proposal = None;
+        self.assistant_ask.clear();
+    }
 }
 
 /// What the steering bar's button asks for: start a continuation, or stop the
@@ -131,6 +202,17 @@ enum SelectionAction {
     Rewrite,
     Elaborate,
     Lore,
+}
+
+/// An action the assistant proposed in the chat. Nothing has happened yet: the
+/// author accepts, denies or retries it right there in the conversation.
+#[derive(Clone)]
+pub(crate) struct AssistantProposal {
+    story_id: String,
+    chapter_id: String,
+    /// The question that produced it, so Retry can ask again.
+    ask: String,
+    action: ai::AssistantAction,
 }
 
 /// One AI suggestion for the lorebook, waiting for the author's yes. For an
@@ -201,6 +283,9 @@ struct LiveDraft {
     story_id: String,
     chapter_id: String,
     draft: Draft,
+    /// 0 for the first attempt; 1 once the app has asked again because the
+    /// model repeated the passage instead of rewriting it.
+    guard_attempt: u8,
 }
 
 struct Toast {
@@ -323,6 +408,9 @@ struct LoreDraft {
     triggers: String,
     description: String,
     pinned: bool,
+    /// A manually created or edited entry keeps its origin. New entries are
+    /// canon unless the assistant's INVENT card made them.
+    invented: bool,
 }
 
 struct ChapterDraft {
@@ -495,7 +583,9 @@ pub struct FolioApp {
     active_chapter: usize,
     right_open: bool,
     right_tab: Tab,
-    settings_open: bool,
+    /// The side panel width the author chose. A narrow window shows less of it,
+    /// but the choice comes back when the window grows.
+    desk_width: f32,
     show_key: bool,
     new_story_open: bool,
     new_story_title: String,
@@ -510,10 +600,13 @@ pub struct FolioApp {
     confirm: Option<Confirm>,
     trash: Vec<TrashItem>,
     trash_next_id: u64,
-    trash_open: bool,
     lore_editor: Option<LoreDraft>,
     /// An AI lorebook suggestion waiting in its review window.
     lore_proposal: Option<LoreProposal>,
+    /// An action from the chat, waiting for Accept, Deny or Retry.
+    assistant_proposal: Option<AssistantProposal>,
+    /// The question behind the running chat request, for a retry.
+    assistant_ask: String,
     lore_search: String,
     /// Installed fonts for the type bar, read once at startup.
     system_fonts: Vec<crate::fonts::SystemFont>,
@@ -534,7 +627,6 @@ pub struct FolioApp {
     test_rx: Option<Receiver<Result<String, String>>>,
     test_status: Option<(bool, String)>,
     /// The prompt editor, opened from the settings.
-    prompts_open: bool,
     /// The endpoint lamp, kept in step with `test_status` and the model list.
     probe: Probe,
     /// The address `probe` speaks about, so a changed endpoint cannot leave a
@@ -546,8 +638,6 @@ pub struct FolioApp {
     /// After a failed save, wait before trying again so a locked file does not
     /// produce a new error every few hundred milliseconds.
     save_retry_at: Option<Instant>,
-    summary_open: bool,
-    find_open: bool,
     find_query: String,
     find_replacement: String,
     find_match_case: bool,
@@ -564,12 +654,14 @@ pub struct FolioApp {
     draft_error: Option<String>,
     /// Whether the draft block should keep scrolling into view as it grows.
     draft_follow: bool,
-    /// Scroll to the draft once, when it first appears.
+    /// Keep asking to scroll to a fresh draft until the request has landed.
     draft_reveal: bool,
+    /// Set when the next rewrite must carry the stricter "change every
+    /// sentence" instruction after an echo.
+    rewrite_nudge: bool,
     scroll_chat: bool,
     /// Follow the running brainstorm answer unless the author scrolls up.
     chat_follow: bool,
-    export_open: bool,
     export_kind: ExportKind,
     export_dir: String,
     /// The file name as typed in the dialog.
@@ -588,8 +680,8 @@ pub struct FolioApp {
 
 impl eframe::App for FolioApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Before anything is painted: light or dark, as the system wants it.
-        theme::follow_system(ctx);
+        // Before anything is painted: the chosen look, and nothing else.
+        theme::keep(ctx);
         self.clamp();
         self.handle_screenshot(ctx);
         self.poll_job(ctx);

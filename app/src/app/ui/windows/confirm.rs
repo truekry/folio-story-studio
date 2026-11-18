@@ -21,7 +21,7 @@ impl FolioApp {
                 Frame::NONE
                     .fill(C::paper())
                     .stroke(Stroke::new(1.0_f32, C::line()))
-                    .corner_radius(16)
+                    .corner_radius(theme::radius(16))
                     .inner_margin(Margin::symmetric(24, 20)),
             )
             .backdrop_color(Color32::from_black_alpha(110))
@@ -99,11 +99,11 @@ impl FolioApp {
                         )
                     }
                     Confirm::Chat { .. } => (
-                        "CLEAR CHAT",
+                        "CLEAR CONVERSATION",
                         "Clear this conversation?".to_string(),
-                        "This removes this chapter's brainstorm — every message here and the condensed memory of older turns. The chapter text, its summary and the lorebook stay exactly as they are.".to_string(),
-                        "Keep chat",
-                        "Clear chat",
+                        "This removes every message with the assistant in this chapter, including the condensed memory of older turns and any proposal still waiting. The chapter text, its summary and the lorebook stay exactly as they are.".to_string(),
+                        "Keep conversation",
+                        "Clear conversation",
                         false,
                     ),
                     Confirm::Replace {
@@ -218,7 +218,7 @@ impl FolioApp {
                     )
                     .fill(C::soft())
                     .stroke(Stroke::new(1.0_f32, C::line()))
-                    .corner_radius(8)
+                    .corner_radius(theme::radius(8))
                     .min_size(Vec2::new(0.0, 32.0));
                     if ui.add(keep).clicked() {
                         cancelled = true;
@@ -231,7 +231,7 @@ impl FolioApp {
                     )
                     .fill(if danger { C::red_deep() } else { C::accent() })
                     .stroke(Stroke::NONE)
-                    .corner_radius(8)
+                    .corner_radius(theme::radius(8))
                     .min_size(Vec2::new(0.0, 32.0));
                     if ui.add(remove).clicked() {
                         confirmed = true;

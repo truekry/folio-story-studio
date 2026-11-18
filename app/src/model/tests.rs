@@ -204,6 +204,22 @@ fn exporting_a_story_without_chapters_says_so() {
 }
 
 #[test]
+fn a_partial_summary_is_not_sold_as_current() {
+    let mut chapter = Library::sample().stories[0].chapters[0].clone();
+    chapter.summary = "The finished blocks only.".to_string();
+    chapter.summary_source = "partial".to_string();
+    chapter.summary_body_hash = crate::model::content_hash(&chapter.body);
+    assert!(chapter.is_summarized());
+    assert!(chapter.is_partial_summary());
+    assert!(!chapter.summary_is_stale());
+    assert_eq!(chapter.summary_state(), "partial summary");
+
+    chapter.summary_source = "ai".to_string();
+    assert!(!chapter.is_partial_summary());
+    assert_eq!(chapter.summary_state(), "summary ready");
+}
+
+#[test]
 fn stale_summary_is_detected() {
     let mut chapter = Library::sample().stories[0].chapters[0].clone();
     assert!(!chapter.summary_is_stale());
@@ -358,19 +374,12 @@ fn the_session_trash_never_reaches_the_saved_library() {
 }
 
 #[test]
-fn an_old_library_shows_the_summary_and_the_choice_is_remembered() {
-    // Libraries written before the toggle existed have no such field.
-    let old = r#"{"stories": [], "active_story": 0, "next_id": 1}"#;
+fn an_old_library_with_the_removed_summary_toggle_still_loads() {
+    // Libraries written before the button was removed carry a field that no
+    // longer exists; unknown fields must not stop the book from opening.
+    let old = r#"{"stories": [], "active_story": 0, "next_id": 1, "show_summary": false}"#;
     let old: Library = serde_json::from_str(old).expect("old library");
-    assert!(old.show_summary);
-
-    let mut library = Library::sample();
-    library.show_summary = false;
-    let json = serde_json::to_string(&library).expect("serialize");
-    let back: Library = serde_json::from_str(&json).expect("deserialize");
-    assert!(!back.show_summary);
-    // Hiding the card never touches the summary itself.
-    assert!(!back.stories[0].chapters[0].summary.is_empty());
+    assert!(old.stories.is_empty());
 }
 
 #[test]
@@ -694,6 +703,23 @@ fn trigger_words_keep_quiet_when_they_are_not_written() {
 }
 
 #[test]
+fn invented_lore_entries_are_marked_and_survive_a_round_trip() {
+    let mut library = Library::sample();
+    let entry = library.stories[0].lore.first_mut().expect("a sample entry");
+    entry.invented = true;
+    let json = serde_json::to_string(&library).expect("serialize");
+    let back: Library = serde_json::from_str(&json).expect("deserialize");
+    assert!(back.stories[0].lore[0].invented);
+}
+
+#[test]
+fn an_old_lore_entry_without_the_marker_is_canon() {
+    let entry: LoreEntry = serde_json::from_str(r#"{"name":"Old Entry"}"#).expect("old entry");
+    assert!(!entry.invented);
+    assert_eq!(entry.category, "Lore");
+}
+
+#[test]
 fn blank_and_one_letter_triggers_are_ignored() {
     let entry = LoreEntry {
         key: String::new(),
@@ -703,6 +729,7 @@ fn blank_and_one_letter_triggers_are_ignored() {
         triggers: " , a ,, the bell ,".to_string(),
         description: String::new(),
         pinned: false,
+        invented: false,
     };
     assert_eq!(entry.trigger_list(), vec!["the bell"]);
     assert!(entry.matches("they rang the bell"));
@@ -719,6 +746,7 @@ fn lore_matching_ignores_case_for_umlauts() {
         triggers: "Öffnung".to_string(),
         description: String::new(),
         pinned: false,
+        invented: false,
     };
     // Matching is done against a lowercased page, as the context builder does.
     let page = "Zwei ältere Boote lagen still; die Öffnung war leer.".to_lowercase();

@@ -166,6 +166,58 @@ pub(crate) fn paragraph_ranges(body: &str) -> Vec<Range<usize>> {
     ranges
 }
 
+/// How much of a rewrite is just the passage again. Words are compared in
+/// order, ignoring case and punctuation, so "The sea was very beautiful." and
+/// "the sea was very beautiful" count as the same text. A true rewrite shares
+/// names and a few nouns, not most of its positions.
+pub(crate) fn echo_similarity(answer: &str, source: &str) -> f32 {
+    fn words(text: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut word = String::new();
+        for ch in text.chars() {
+            if ch.is_alphanumeric() {
+                word.extend(ch.to_lowercase());
+            } else if !word.is_empty() {
+                out.push(std::mem::take(&mut word));
+            }
+        }
+        if !word.is_empty() {
+            out.push(word);
+        }
+        out
+    }
+    let answer = words(answer);
+    let source = words(source);
+    let longest = answer.len().max(source.len());
+    if longest == 0 {
+        return 0.0;
+    }
+    if answer == source {
+        return 1.0;
+    }
+    let same = answer
+        .iter()
+        .zip(source.iter())
+        .filter(|(a, b)| a == b)
+        .count();
+    same as f32 / longest as f32
+}
+
+/// Splice paragraph corrections into a body. Ranges are char indices into the
+/// same text the correction was made from; they are applied bottom-up so each
+/// one keeps addressing the words it was measured against. Out-of-range values
+/// are clamped instead of panicking: a half-written chapter must never take the
+/// window down.
+pub(crate) fn apply_corrections(body: &str, corrections: &[(Range<usize>, String)]) -> String {
+    let mut chars: Vec<char> = body.chars().collect();
+    for (range, text) in corrections.iter().rev() {
+        let start = range.start.min(chars.len());
+        let end = range.end.clamp(start, chars.len());
+        chars.splice(start..end, text.chars());
+    }
+    chars.into_iter().collect()
+}
+
 /// A blank field sends nothing.
 pub(crate) fn brainstorm_send_text(input: &str) -> Option<String> {
     let text = input.trim();

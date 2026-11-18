@@ -113,7 +113,7 @@ fn a_cut_reply_is_continued_until_the_sentence_ends() {
         model: "mock".to_string(),
         // Close enough to the prompt that the second round has to share the
         // remaining window instead of asking for the first round's room again.
-        context_limit: 600,
+        context_limit: 360,
         ..Default::default()
     };
     let reply = request_with_target(&settings, "Summarize chapter two.", &[], "", 90)
@@ -122,13 +122,15 @@ fn a_cut_reply_is_continued_until_the_sentence_ends() {
 
     let requests = worker.join().expect("mock server finished");
     assert_eq!(requests.len(), 2, "the cut reply must be continued once");
-    // The first request carries the word target as reply room.
-    assert_eq!(requests[0]["max_tokens"], 380);
+    // The first request carries the word target as reply room, shortened by
+    // the window it has to share with the prompt.
+    let first_cap = requests[0]["max_tokens"].as_u64().expect("first cap");
+    assert!(first_cap <= 280, "first cap was {first_cap}");
+    assert!(first_cap >= 64, "first cap was {first_cap}");
     // The partial text and the continue note now fill part of the window, so
-    // the second round may ask for less. Asking for the full 380 again would
-    // push prompt and answer past the endpoint's 600-token window.
+    // the second round asked for less than the first.
     let second_cap = requests[1]["max_tokens"].as_u64().expect("second cap");
-    assert!(second_cap < 380, "second cap was {second_cap}");
+    assert!(second_cap < first_cap, "second cap was {second_cap}");
     assert!(second_cap >= 64, "second cap was {second_cap}");
     // The second one shows the partial text and asks to go on.
     let messages = requests[1]["messages"].as_array().expect("messages");
