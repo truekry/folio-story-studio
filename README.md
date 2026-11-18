@@ -33,19 +33,9 @@ features are in place, and changes are saved automatically.
 
 ## What is new in 0.2.3
 
-- **Two layouts.** One grid shapes **Continue**, a second shapes the assistant's
-  context; each has its own order, its own switches and its own reset.
-- **Rewrite and Elaborate got their own recipe.** They are no longer steered by
-  the layout: a rewrite sees the passage plus one paragraph on each side, an
-  elaboration adds the premise, the mentioned lore and the chapter summary. The
-  **Passage** block is gone from the layout, and steering stays where it belongs
-  – with the next continuation.
-- **A chat you can step back.** The newest message in the chapter chat carries a
-  small bin; one click removes exactly that entry, so the conversation can be
-  rolled back line by line. The condensed memory is untouched.
-- **Prompt blocks you can switch off.** A double-click in either layout disables
-  a block and it is no longer sent. The task block always stays on; reset brings
-  every block back.
+0.2.3 does not add a new headline feature. It sharpens what is already there,
+hardens the stored key and keeps two windows from writing the same books:
+
 - **The API key is sealed.** It is stored as `api_key_sealed`, bound to this
   machine, this account and a `secrets.pepper` file next to the config. Only the
   key is unreadable – endpoint, model, prompts and all other settings stay plain
@@ -53,6 +43,23 @@ features are in place, and changes are saved automatically.
 - **One window per library.** Starting Folio again brings the running window
   forward instead of opening a second one on the same books. A lock next to
   `config.json` and a loopback socket do that, so no second process ever writes.
+- **Two prompt layouts.** Writing and Chat each have their own grid, with its own
+  order, off-switches and reset. The **Passage** block is gone, and the Premise
+  block is now called **Story bible**, the term the left column uses.
+- **Rewrite and Elaborate got their own recipe.** They are no longer steered by
+  the layout: a rewrite sees the passage plus one paragraph on each side, an
+  elaboration adds the premise, the mentioned lore and the chapter summary.
+  Never the whole chapter, and never the steering note – which now also survives
+  an accepted rewrite for the next continuation.
+- **A chat you can step back.** The newest message in the chapter chat carries a
+  small bin; one click removes exactly that entry, so the conversation can be
+  rolled back line by line. The condensed memory is untouched.
+- **Prompt blocks you can switch off.** A double-click in either layout disables
+  a block and it is no longer sent. The task block always stays on; reset brings
+  every block back.
+
+Read as a whole: more control over what the AI sees, a rewrite that stays in its
+passage, and fewer ways for data to leak or be overwritten.
 
 ## Features
 
