@@ -54,22 +54,6 @@ features are in place, and changes are saved automatically.
 - **A crash log** at `%APPDATA%\Folio\folio-crash.log` records a panic with a
   backtrace and the last actions, for release builds without a console.
 
-## What was new in 0.1.1
-
-- **Readable messages:** confirmation dialogs and toasts wrap long text, and
-  their buttons stay reachable in small windows.
-- **Settings that fit:** the window scrolls, while **Done** waits in a fixed
-  footer at the bottom.
-- **Block-wise summaries:** a long chapter is summarised in blocks of about
-  1,200 words and then merged into one continuous text. The word target in the
-  prompt editor applies per block, and the Summarize button turns into **Stop**
-  while a run is going.
-- **Split storage:** the library is now `config.json` plus one file per book
-  under `stories\`. An old single `library.json` is converted on first start.
-- **Stable keys instead of numeric ids:** books, chapters and lore entries are
-  identified by short keys such as `A43K`, `A43K-001` and `A43K-L001`. The keys
-  are internal bookkeeping and are not shown in the interface.
-
 ## Features
 
 - **Story library** with chapters, word counts and a story bible (premise,
