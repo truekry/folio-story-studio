@@ -88,6 +88,16 @@ impl LayoutKind {
     }
 }
 
+/// What a layout costs right now, with the numbers behind the line.
+pub(crate) struct PromptSize {
+    pub line: String,
+    pub tight: bool,
+    pub detail: String,
+    /// A second, quieter line for what the number makes up: the chat so far,
+    /// or the missing question. `None` leaves the line alone.
+    pub note: Option<String>,
+}
+
 /// One card in the prompt editor: the function's name, the length it aims for,
 /// and the instruction itself.
 /// A layout card: equally sized blocks in reading order. Drag one onto another
@@ -98,6 +108,7 @@ pub(crate) fn prompt_layout_card(
     kind: LayoutKind,
     saved: &mut Vec<String>,
     disabled: &mut Vec<String>,
+    size: Option<PromptSize>,
 ) -> bool {
     let set = kind.blocks();
     let mut blocks = ai::normalized_order(saved, set);
@@ -116,6 +127,17 @@ pub(crate) fn prompt_layout_card(
             ui.set_width(ui.available_width());
             ui.label(caps(kind.title(), C::accent_deep()));
             ui.label(RichText::new(kind.intro()).size(9.5).color(C::muted()));
+            if let Some(size) = &size {
+                ui.label(
+                    RichText::new(&size.line)
+                        .size(9.0)
+                        .color(if size.tight { C::amber() } else { C::muted() }),
+                )
+                .on_hover_text(&size.detail);
+                if let Some(note) = &size.note {
+                    ui.label(RichText::new(note).size(8.5).color(C::muted()));
+                }
+            }
             ui.add_space(5.0);
             let gap = ui.spacing().item_spacing.x;
             let available = ui.available_width();

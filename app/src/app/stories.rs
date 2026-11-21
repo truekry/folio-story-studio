@@ -140,7 +140,7 @@ impl FolioApp {
             id: trash_id,
             index,
             story,
-            deleted_at: Instant::now(),
+            deleted_at: crate::model::now_millis(),
         });
         self.active_story = self.library.active_story;
         self.active_chapter = self
@@ -221,7 +221,7 @@ impl FolioApp {
             story_title,
             index,
             chapter,
-            deleted_at: Instant::now(),
+            deleted_at: crate::model::now_millis(),
         });
         if self.story_id() == story_id {
             self.active_chapter = open_chapter;
@@ -268,7 +268,7 @@ impl FolioApp {
             story_title,
             index,
             entry,
-            deleted_at: Instant::now(),
+            deleted_at: crate::model::now_millis(),
         });
         self.confirm = None;
         self.mark_dirty();
@@ -491,5 +491,20 @@ impl FolioApp {
         self.new_chapter_title.clear();
         self.close_tab(Tab::Summary);
         self.mark_dirty();
+    }
+}
+
+/// The bin lives beside the books, so a confirmed delete can be undone after a
+/// restart too. A missing or broken bin file simply means an empty bin.
+pub(crate) fn load_trash(dir: &Path) -> Vec<TrashItem> {
+    crate::model::read_text(&dir.join("trash.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default()
+}
+
+pub(crate) fn save_trash(dir: &Path, trash: &[TrashItem]) {
+    if let Ok(text) = serde_json::to_string_pretty(trash) {
+        let _ = crate::model::write_atomic(&dir.join("trash.json"), &text);
     }
 }

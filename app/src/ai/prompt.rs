@@ -555,6 +555,21 @@ pub fn chat_prompt_with_neighbours(
     }
 }
 
+/// How many characters of the open chapter a recipe shows. The assistant reads
+/// more of the page, because it has to answer questions about it; a prose draft
+/// only needs the tail to continue from. One place for both, so the settings can
+/// show why the two requests differ.
+pub fn chapter_excerpt_chars(action: Action, settings: &AiSettings) -> usize {
+    if action == Action::Brainstorm {
+        match settings.context_limit {
+            0 => 12_000,
+            tokens => (tokens / 2 * 4).clamp(6_000, 24_000),
+        }
+    } else {
+        6_000
+    }
+}
+
 /// Take the blocks the author left switched on, in their order.
 fn chosen(
     blocks: &[(PromptBlock, Option<String>)],
@@ -582,7 +597,8 @@ fn prose_prompt(
     task: &str,
     settings: &AiSettings,
 ) -> String {
-    let mut chapter_text = current_chapter_block(chapter, 6_000);
+    let mut chapter_text =
+        current_chapter_block(chapter, chapter_excerpt_chars(Action::Continue, settings));
     // A weak model otherwise wanders into a new landscape: name the last
     // lines it must continue from, right next to the chapter text.
     if !chapter.body.trim().is_empty() {
@@ -634,12 +650,9 @@ fn assistant_prompt(
 ) -> String {
     // The assistant has to answer questions about the chapter it can see, so it
     // gets more of the page than a prose draft does. When the endpoint reports
-    // its window, half of it is reserved for the chapter; otherwise the cap is
-    // a cautious default.
-    let chapter_chars = match settings.context_limit {
-        0 => 12_000,
-        tokens => (tokens / 2 * 4).clamp(6_000, 24_000),
-    };
+    // its window, half of it is reserved for the chapter; the helper keeps that
+    // rule in one place.
+    let chapter_chars = chapter_excerpt_chars(Action::Brainstorm, settings);
     let blocks = [
         (PromptBlock::Task, Some(format!("TASK:\n{task}\n"))),
         (PromptBlock::Story, Some(story_block(story))),

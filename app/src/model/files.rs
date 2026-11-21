@@ -38,11 +38,25 @@ pub fn file_name_part(text: &str, fallback: &str) -> String {
         out = out.chars().take(70).collect();
         out = out.trim_end_matches(['.', ' ']).to_string();
     }
-    if out.is_empty() {
+    if out.is_empty() || windows_reserved(&out) {
         fallback.to_string()
     } else {
         out
     }
+}
+
+/// Windows reserves these names even with an extension, so `CON.pdf` cannot be
+/// written at all. A book with such a title exports under the fallback name.
+fn windows_reserved(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or("").trim_end();
+    let stem = stem.to_ascii_uppercase();
+    if matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL") {
+        return true;
+    }
+    stem.len() == 4
+        && (stem.starts_with("COM") || stem.starts_with("LPT"))
+        && stem.as_bytes()[3].is_ascii_digit()
+        && stem.as_bytes()[3] != b'0'
 }
 
 /// A name the author typed, minus an extension of the same kind, so

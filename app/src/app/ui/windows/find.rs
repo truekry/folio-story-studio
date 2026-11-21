@@ -72,7 +72,12 @@ impl FolioApp {
             }
         });
         let query = self.find_query.trim().to_string();
-        let ranges = find_char_ranges(&chapter.body, &query, self.find_match_case);
+        let ranges = find_ranges_cached(
+            &mut self.find_cache,
+            &chapter.body,
+            &query,
+            self.find_match_case,
+        );
         let total = ranges.len();
         ui.horizontal_wrapped(|ui| {
             let previous = Button::new(
@@ -215,7 +220,13 @@ impl FolioApp {
             self.pending_selection = Some((chapter.key.clone(), range));
         } else if do_replace {
             let query = self.find_query.trim().to_string();
-            let matches = find_char_ranges(&chapter.body, &query, self.find_match_case).len();
+            let matches = find_ranges_cached(
+                &mut self.find_cache,
+                &chapter.body,
+                &query,
+                self.find_match_case,
+            )
+            .len();
             self.confirm = Some(Confirm::Replace {
                 query,
                 replacement: self.find_replacement.clone(),

@@ -77,3 +77,28 @@ fn a_length_target_decides_how_much_room_the_reply_gets() {
     let settings = AiSettings::default();
     assert_eq!(settings.max_tokens, 700);
 }
+
+#[test]
+fn the_size_line_names_the_window_or_says_it_is_unknown() {
+    assert_eq!(
+        size_line("Continue request", 1240, 0),
+        "Continue request ≈ 1240 tokens · context window not reported"
+    );
+    assert_eq!(
+        size_line("Assistant request", 1240, 32768),
+        "Assistant request ≈ 1240 tokens · 4 % of the 32768 window"
+    );
+    // The share is rounded, not cut off.
+    assert!(size_line("Assistant request", 16384, 32768).contains("50 %"));
+}
+
+#[test]
+fn a_tight_request_is_marked_at_the_fill_line() {
+    assert!(
+        !size_is_tight(100, 0),
+        "without a window there is no judgement"
+    );
+    assert!(!size_is_tight(50, 100));
+    assert!(size_is_tight(85, 100));
+    assert!(size_is_tight(90, 100));
+}

@@ -2,6 +2,53 @@
 
 use super::*;
 
+#[cfg(debug_assertions)]
+const SCREENSHOT_PROBE: &str = "192.168.10.20:5001/v1";
+#[cfg(not(debug_assertions))]
+const SCREENSHOT_PROBE: &str = "";
+
+/// A plain notice must not throw away the only copy of an undoable change.
+/// Keep the old action and its 14-second clock, and show the new text on it.
+fn notice(
+    text: impl Into<String>,
+    error: bool,
+    undo: Option<UndoAction>,
+    previous: Option<Toast>,
+) -> Toast {
+    if undo.is_some() {
+        return Toast {
+            text: text.into(),
+            error,
+            born: Instant::now(),
+            undo,
+        };
+    }
+    let kept = previous.filter(|toast| toast.undo.is_some());
+    let born = kept.as_ref().map_or_else(Instant::now, |toast| toast.born);
+    Toast {
+        text: text.into(),
+        error,
+        born,
+        undo: kept.and_then(|toast| toast.undo),
+    }
+}
+
+/// The screenshot views are a development tool. A normal run never reads the
+/// variable, and a release build does not compile this path at all.
+#[cfg(debug_assertions)]
+fn requested_debug_view(screenshot_mode: bool) -> String {
+    if screenshot_mode {
+        std::env::var("FOLIO_VIEW").unwrap_or_default()
+    } else {
+        String::new()
+    }
+}
+
+#[cfg(not(debug_assertions))]
+fn requested_debug_view(_screenshot_mode: bool) -> String {
+    String::new()
+}
+
 impl FolioApp {
     pub fn new(cc: &eframe::CreationContext<'_>, screenshot: Option<PathBuf>) -> Self {
         let shot = screenshot.map(|path| Shot {
@@ -69,8 +116,9 @@ impl FolioApp {
             .get(active_story)
             .map(|s| s.open_chapter.min(s.chapters.len().saturating_sub(1)))
             .unwrap_or(0);
-        // Handy for checking a particular view during development.
-        let debug_view = std::env::var("FOLIO_VIEW").unwrap_or_default();
+        // Handy for checking a particular view during development. In every
+        // other run this is empty, so no saved setting can be overwritten.
+        let debug_view = requested_debug_view(screenshot_mode);
         // `FOLIO_DESK_WIDTH=640` pins the side panel for screenshot checks.
         let desk_width = std::env::var("FOLIO_DESK_WIDTH")
             .ok()
@@ -182,6 +230,15 @@ impl FolioApp {
             "trash" => Tab::Trash,
             _ => Tab::Ai,
         };
+        let trash = store
+            .as_ref()
+            .map(|store| super::stories::load_trash(store.dir()))
+            .unwrap_or_default();
+        let trash_next_id = trash
+            .iter()
+            .map(|item| item.id().saturating_add(1))
+            .max()
+            .unwrap_or(1);
         let mut app = Self {
             library,
             store,
@@ -208,8 +265,8 @@ impl FolioApp {
             story_premise_draft,
             chapter_editor,
             confirm,
-            trash: Vec::new(),
-            trash_next_id: 1,
+            trash,
+            trash_next_id,
             lore_editor: None,
             lore_proposal: None,
             assistant_proposal: None,
@@ -248,6 +305,7 @@ impl FolioApp {
             find_replace: debug_view == "find-replace" || debug_view == "replace-confirm",
             find_index: None,
             find_focus: false,
+            find_cache: None,
             pending_selection: None,
             editor_selection: None,
             draft_live: None,
@@ -709,7 +767,7 @@ opens the garden gate instead."
         // The lamp: a fixed answer while drawing a screenshot, a real question
         // at startup. The demo writer has no endpoint to ask, so the dot stays
         // grey and says why on hover.
-        let probe_base = "192.168.10.20:5001/v1".to_string();
+        let probe_base = SCREENSHOT_PROBE.to_string();
         match debug_view.as_str() {
             "probe-online" => {
                 app.library.settings.base_url = probe_base.clone();
@@ -889,32 +947,27 @@ carrying the smell of cold iron, and the house settled around her as if it had b
     }
 
     pub(crate) fn notify(&mut self, text: impl Into<String>, error: bool) {
-        self.toast = Some(Toast {
-            text: text.into(),
-            error,
-            born: Instant::now(),
-            undo: None,
-        });
+        self.toast = Some(notice(text, error, None, self.toast.take()));
     }
 
     /// A delete notice stays a little longer and carries an Undo button. The
-    /// deleted item itself stays in the session trash until Folio closes.
+    /// deleted item itself stays in the bin until it is put back.
     pub(crate) fn notify_deleted(&mut self, text: impl Into<String>, undo_id: u64) {
-        self.toast = Some(Toast {
-            text: text.into(),
-            error: false,
-            born: Instant::now(),
-            undo: Some(UndoAction::Delete(undo_id)),
-        });
+        self.toast = Some(notice(
+            text,
+            false,
+            Some(UndoAction::Delete(undo_id)),
+            self.toast.take(),
+        ));
     }
 
     pub(crate) fn notify_replaced(&mut self, text: impl Into<String>, undo: ReplaceUndo) {
-        self.toast = Some(Toast {
-            text: text.into(),
-            error: false,
-            born: Instant::now(),
-            undo: Some(UndoAction::Replace(undo)),
-        });
+        self.toast = Some(notice(
+            text,
+            false,
+            Some(UndoAction::Replace(undo)),
+            self.toast.take(),
+        ));
     }
 
     /// Ctrl+Z outside a text field: take back the change the current notice
@@ -947,6 +1000,9 @@ carrying the smell of cold iron, and the house settled around her as if it had b
             Ok(()) => {
                 self.dirty = false;
                 self.save_retry_at = None;
+                if let Some(dir) = self.store.as_ref().map(|store| store.dir().to_path_buf()) {
+                    super::stories::save_trash(&dir, &self.trash);
+                }
             }
             Err(errors) => {
                 self.save_retry_at = Some(Instant::now() + Duration::from_secs(5));
@@ -1111,4 +1167,33 @@ carrying the smell of cold iron, and the house settled around her as if it had b
     }
 
     // ---------------------------------------------------------------- top bar
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_debug_view_is_never_requested_in_a_normal_run() {
+        std::env::set_var("FOLIO_VIEW", "settings-key");
+        assert_eq!(requested_debug_view(false), "");
+        std::env::remove_var("FOLIO_VIEW");
+    }
+
+    #[test]
+    fn a_new_notice_keeps_an_unfinished_undo() {
+        let old = Toast {
+            text: "Replaced 3 matches".to_string(),
+            error: false,
+            born: Instant::now(),
+            undo: Some(UndoAction::Replace(ReplaceUndo {
+                story_id: "A43K".to_string(),
+                chapters: Vec::new(),
+            })),
+        };
+        let new = notice("AI request failed", true, None, Some(old));
+        assert!(matches!(new.undo, Some(UndoAction::Replace(_))));
+        assert_eq!(new.text, "AI request failed");
+        assert!(new.error);
+    }
 }

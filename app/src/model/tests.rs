@@ -101,6 +101,12 @@ fn file_names_are_safe_for_windows() {
     assert_eq!(file_name_part("A/B: C?", "Story"), "A B C");
     assert_eq!(file_name_part("  ...  ", "Story"), "Story");
     assert_eq!(file_name_part("Grüße & Küsse", "Story"), "Grüße & Küsse");
+    // Windows cannot create CON.pdf, NUL.txt or COM1.pdf, even with a suffix.
+    assert_eq!(file_name_part("CON", "Story"), "Story");
+    assert_eq!(file_name_part("nul.txt", "Story"), "Story");
+    assert_eq!(file_name_part("LPT9", "Story"), "Story");
+    assert_eq!(file_name_part("COM0", "Story"), "COM0");
+    assert_eq!(file_name_part("Coney", "Story"), "Coney");
     // Long titles are cut without leaving a trailing dot or space.
     let long = "W".repeat(120);
     assert!(file_name_part(&long, "Story").chars().count() <= 70);

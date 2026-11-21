@@ -1,6 +1,6 @@
 [package]
 name = "folio"
-version = "0.2.3"
+version = "0.2.4"
 edition = "2021"
 authors = ["truekry", "DeepSeek V4.1 Flash"]
 license = "MIT"

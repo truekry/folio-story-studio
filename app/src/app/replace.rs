@@ -116,27 +116,65 @@ pub(crate) fn find_char_ranges(text: &str, query: &str, match_case: bool) -> Vec
     if query.is_empty() {
         return Vec::new();
     }
-    let mut out = Vec::new();
     if match_case {
+        let mut out = Vec::new();
         for (byte, matched) in text.match_indices(query) {
             let start = text[..byte].chars().count();
             let end = start + matched.chars().count();
             out.push(start..end);
         }
+        out
     } else {
         let (lower, map) = lowercase_with_map(text);
-        let needle = query.to_lowercase();
-        for (byte, matched) in lower.match_indices(&needle) {
-            let Some(start) = map.get(byte).copied() else {
-                continue;
-            };
-            let end = map
-                .get(byte + matched.len().saturating_sub(1))
-                .copied()
-                .unwrap_or(start)
-                + 1;
-            out.push(start..end);
-        }
+        ranges_in_lower(&lower, &map, &query.to_lowercase())
+    }
+}
+
+/// The UI calls Find every frame. Reuse the lowercased chapter and its map
+/// while the text and the query stay the same; an edit changes the key.
+pub(crate) fn find_ranges_cached(
+    cache: &mut Option<FindCache>,
+    text: &str,
+    query: &str,
+    match_case: bool,
+) -> Vec<Range<usize>> {
+    if query.is_empty() {
+        return Vec::new();
+    }
+    if match_case {
+        return find_char_ranges(text, query, true);
+    }
+    let stale = cache
+        .as_ref()
+        .is_some_and(|hit| hit.text != text || hit.query != query);
+    if stale || cache.is_none() {
+        let (lower, map) = lowercase_with_map(text);
+        *cache = Some(FindCache {
+            text: text.to_string(),
+            query: query.to_string(),
+            needle: query.to_lowercase(),
+            lower,
+            map,
+        });
+    }
+    let hit = cache.as_ref().expect("set above");
+    ranges_in_lower(&hit.lower, &hit.map, &hit.needle)
+}
+
+/// Ranges from lowercased text and the map of each of its bytes back to the
+/// character it came from. Shared by the one-shot and the cached path.
+fn ranges_in_lower(lower: &str, map: &[usize], needle: &str) -> Vec<Range<usize>> {
+    let mut out = Vec::new();
+    for (byte, matched) in lower.match_indices(needle) {
+        let Some(start) = map.get(byte).copied() else {
+            continue;
+        };
+        let end = map
+            .get(byte + matched.len().saturating_sub(1))
+            .copied()
+            .unwrap_or(start)
+            + 1;
+        out.push(start..end);
     }
     out
 }

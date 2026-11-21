@@ -28,6 +28,7 @@ use eframe::egui::{
     Id, Key, Label, Layout, Margin, Modal, PointerButton, Pos2, Response, RichText, ScrollArea,
     Sense, Stroke, TextEdit, TextFormat, TopBottomPanel, Ui, Vec2, ViewportCommand, Window,
 };
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -257,6 +258,16 @@ impl StreamFold {
     }
 }
 
+/// The lowercased chapter and its byte-to-character map, kept while Find is
+/// open so each frame reuses them instead of indexing the whole chapter again.
+pub(crate) struct FindCache {
+    text: String,
+    query: String,
+    needle: String,
+    lower: String,
+    map: Vec<usize>,
+}
+
 struct Job {
     kind: JobKind,
     story_id: String,
@@ -464,14 +475,15 @@ enum Confirm {
     },
 }
 
-/// Something removed while this window is open. It lives only in memory, so
-/// closing Folio really forgets it; restoring puts it back where it was.
+/// Something removed from a book. It is kept in `trash.json` until it is put
+/// back, so closing Folio no longer makes a confirmed delete permanent.
+#[derive(Clone, Serialize, Deserialize)]
 enum TrashItem {
     Story {
         id: u64,
         index: usize,
         story: Story,
-        deleted_at: Instant,
+        deleted_at: u64,
     },
     Chapter {
         id: u64,
@@ -479,7 +491,7 @@ enum TrashItem {
         story_title: String,
         index: usize,
         chapter: Chapter,
-        deleted_at: Instant,
+        deleted_at: u64,
     },
     Lore {
         id: u64,
@@ -487,7 +499,7 @@ enum TrashItem {
         story_title: String,
         index: usize,
         entry: LoreEntry,
-        deleted_at: Instant,
+        deleted_at: u64,
     },
 }
 
@@ -539,7 +551,7 @@ impl TrashItem {
         }
     }
 
-    fn deleted_at(&self) -> Instant {
+    fn deleted_at(&self) -> u64 {
         match self {
             TrashItem::Story { deleted_at, .. }
             | TrashItem::Chapter { deleted_at, .. }
@@ -649,6 +661,7 @@ pub struct FolioApp {
     /// Which match "Find next" last jumped to, if any.
     find_index: Option<usize>,
     find_focus: bool,
+    find_cache: Option<FindCache>,
     pending_selection: Option<(String, Range<usize>)>,
     editor_selection: Option<Range<usize>>,
     /// The prose draft currently being written, if any.

@@ -82,6 +82,9 @@ pub(crate) struct Store {
     dir: PathBuf,
     last_config: Option<u64>,
     last_stories: HashMap<String, u64>,
+    /// Files we loaded or wrote ourselves. Only these may be removed by the
+    /// delete sweep; a file someone drops into `stories\` later is left alone.
+    known_files: HashSet<String>,
 }
 
 impl Store {
@@ -150,10 +153,12 @@ impl Store {
                                     "The old library was migrated but could not be moved aside: {error}"
                                 )),
                             }
+                            let known_files = cache.keys().cloned().collect();
                             let store = Store {
                                 dir: dir.to_path_buf(),
                                 last_config,
                                 last_stories: cache,
+                                known_files,
                             };
                             return (library, store, report);
                         }
@@ -165,6 +170,7 @@ impl Store {
                         dir: dir.to_path_buf(),
                         last_config: None,
                         last_stories: HashMap::new(),
+                        known_files: HashSet::new(),
                     };
                     return (library, store, report);
                 }
@@ -197,10 +203,12 @@ impl Store {
             Some(config) => config.into_library(stories),
             None => Config::default().into_library(stories),
         };
+        let known_files = cache.keys().cloned().collect();
         let mut store = Store {
             dir: dir.to_path_buf(),
             last_config,
             last_stories: cache,
+            known_files,
         };
         // A key from an older version is sealed right now, so the plain text
         // does not survive this start, even if the author changes nothing.
@@ -271,6 +279,7 @@ impl Store {
             match write_atomic(&path, &text) {
                 Ok(()) => {
                     self.last_stories.insert(story.key.clone(), hash);
+                    self.known_files.insert(story.key.clone());
                 }
                 Err(error) => errors.push(format!("Could not save “{}”: {error}", story.title)),
             }
@@ -288,7 +297,7 @@ impl Store {
                 let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
                     continue;
                 };
-                if keys.contains(stem) {
+                if keys.contains(stem) || !self.known_files.contains(stem) {
                     continue;
                 }
                 if let Err(error) = fs::remove_file(&path) {
@@ -298,6 +307,7 @@ impl Store {
                     ));
                 } else {
                     self.last_stories.remove(stem);
+                    self.known_files.remove(stem);
                 }
             }
         }
@@ -356,7 +366,7 @@ fn story_path(stories_dir: &Path, key: &str) -> PathBuf {
 /// Read a JSON file the way Windows editors write it: an external tool may
 /// prepend a UTF-8 byte-order mark, which `serde_json` rejects. The file itself
 /// is never rewritten here; only the text handed to the parser is trimmed.
-fn read_text(path: &Path) -> std::io::Result<String> {
+pub(crate) fn read_text(path: &Path) -> std::io::Result<String> {
     let text = fs::read_to_string(path)?;
     Ok(strip_bom(&text).to_string())
 }
@@ -397,9 +407,15 @@ fn read_stories(
         let text = match read_text(&path) {
             Ok(text) => text,
             Err(error) => {
+                // Move it aside like an unreadable JSON file. Left in place it
+                // would look like a deleted book to the next save's cleanup.
+                let backup = backup_file(&path, "broken", report);
                 report.warnings.push(format!(
-                    "Could not read the book file {}: {error}",
-                    path.display()
+                    "Could not read the book file {}: {error}. It was kept as {}.",
+                    path.display(),
+                    backup
+                        .map(|backup| backup.display().to_string())
+                        .unwrap_or_else(|| path.display().to_string())
                 ));
                 continue;
             }
@@ -453,7 +469,7 @@ fn write_migration(dir: &Path, library: &Library) -> Result<(u64, HashMap<String
     Ok((content_hash(&text), hashes))
 }
 
-fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
+pub(crate) fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
     let tmp = path.with_extension("json.tmp");
     fs::write(&tmp, text).map_err(|error| format!("Could not write {}: {error}", tmp.display()))?;
     if let Err(error) = fs::rename(&tmp, path) {

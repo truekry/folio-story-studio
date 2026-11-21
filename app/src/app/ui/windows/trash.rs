@@ -8,12 +8,12 @@ impl FolioApp {
         let mut close = false;
         let mut restore: Option<u64> = None;
         ui.label(
-                    RichText::new(
-                        "Everything you delete stays here until you close Folio. After a restart it is really gone.",
-                    )
-                    .size(11.5)
-                    .color(C::ink_soft()),
-                );
+            RichText::new(
+                "Everything you delete stays here until you put it back. It survives a restart.",
+            )
+            .size(11.5)
+            .color(C::ink_soft()),
+        );
         ui.add_space(7.0);
         if self.trash.is_empty() {
             Frame::NONE
@@ -24,7 +24,7 @@ impl FolioApp {
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     ui.label(
-                        RichText::new("Nothing deleted since Folio started.")
+                        RichText::new("Nothing in the bin.")
                             .size(12.0)
                             .italics()
                             .color(C::muted()),
@@ -46,7 +46,8 @@ impl FolioApp {
                             .story_id()
                             .map(|story_id| self.library.story(&story_id).is_none())
                             .unwrap_or(false);
-                        let seconds = item.deleted_at().elapsed().as_secs();
+                        let seconds =
+                            crate::model::now_millis().saturating_sub(item.deleted_at()) / 1000;
                         let age = if seconds < 5 {
                             "just now".to_string()
                         } else if seconds < 60 {
@@ -118,7 +119,7 @@ impl FolioApp {
             }
             ui.label(
                 RichText::new(format!(
-                    "{} kept for this session",
+                    "{} in the bin",
                     plural(self.trash.len(), "item", "items")
                 ))
                 .size(9.5)

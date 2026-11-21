@@ -902,3 +902,67 @@ fn the_premise_block_is_called_the_story_bible() {
     assert_eq!(PromptBlock::Premise.label(), "Story bible");
     assert_eq!(PromptBlock::Premise.card_label(), "Story bible");
 }
+
+#[test]
+fn the_assistant_reads_more_of_the_chapter_than_a_draft() {
+    let settings = AiSettings::default();
+    assert_eq!(chapter_excerpt_chars(Action::Continue, &settings), 6_000);
+    assert_eq!(chapter_excerpt_chars(Action::Brainstorm, &settings), 12_000);
+
+    // A reported window gives the assistant half of it, within bounds.
+    let small = AiSettings {
+        context_limit: 8_000,
+        ..Default::default()
+    };
+    assert_eq!(chapter_excerpt_chars(Action::Brainstorm, &small), 16_000);
+    let huge = AiSettings {
+        context_limit: 200_000,
+        ..Default::default()
+    };
+    assert_eq!(chapter_excerpt_chars(Action::Brainstorm, &huge), 24_000);
+}
+
+#[test]
+fn a_switched_off_block_shrinks_the_request() {
+    let library = Library::sample();
+    let story = &library.stories[0];
+    let chapter = &story.chapters[1];
+    let mut settings = AiSettings::default();
+    let full = chat_prompt(story, chapter, Action::Continue, "", "", &settings);
+    let full_tokens = prompt_tokens(&full, &[], "");
+
+    settings.prompts.disabled = vec!["lorebook".to_string()];
+    let thin = chat_prompt(story, chapter, Action::Continue, "", "", &settings);
+    let thin_tokens = prompt_tokens(&thin, &[], "");
+    assert!(
+        thin_tokens < full_tokens,
+        "switching the lorebook off must lower the size: {thin_tokens} vs {full_tokens}"
+    );
+}
+
+#[test]
+fn the_assistant_size_grows_with_its_conversation() {
+    let library = Library::sample();
+    let story = &library.stories[0];
+    let mut chapter = story.chapters[1].clone();
+    let settings = AiSettings::default();
+    let bare = chat_prompt(story, &chapter, Action::Brainstorm, "Why?", "", &settings);
+    let bare_tokens = prompt_tokens(&bare, &chapter.chat, &chapter.chat_summary);
+
+    chapter.chat.push(crate::model::ChatMessage {
+        role: "user".to_string(),
+        text: "A long earlier question about the tide and the bell.".to_string(),
+        demo: false,
+    });
+    chapter.chat.push(crate::model::ChatMessage {
+        role: "assistant".to_string(),
+        text: "A long earlier answer about the map room and the tea.".to_string(),
+        demo: false,
+    });
+    let busy = chat_prompt(story, &chapter, Action::Brainstorm, "Why?", "", &settings);
+    let busy_tokens = prompt_tokens(&busy, &chapter.chat, &chapter.chat_summary);
+    assert!(
+        busy_tokens > bare_tokens,
+        "the assistant's conversation must count: {busy_tokens} vs {bare_tokens}"
+    );
+}

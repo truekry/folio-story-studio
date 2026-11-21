@@ -336,7 +336,7 @@ impl FolioApp {
                 let find_ranges = if find_query.is_empty() {
                     Vec::new()
                 } else {
-                    find_char_ranges(&body, &find_query, find_match_case)
+                    find_ranges_cached(&mut self.find_cache, &body, &find_query, find_match_case)
                 };
                 let find_active = self.find_index.filter(|index| *index < find_ranges.len());
                 if let Some((pending_id, range)) = self.pending_selection.clone() {

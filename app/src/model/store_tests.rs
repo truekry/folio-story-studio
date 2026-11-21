@@ -222,6 +222,22 @@ fn deleting_a_book_removes_its_file_and_undo_writes_it_back() {
 }
 
 #[test]
+fn a_file_dropped_after_open_is_not_removed_by_a_save() {
+    let (dir, library, mut store) = migrated("foreign-file");
+    let foreign = dir.join("stories").join("FOREIGN.json");
+    fs::write(&foreign, "{not one of ours").expect("foreign book");
+
+    store
+        .save(&library)
+        .expect("save with a foreign file present");
+
+    assert!(
+        foreign.exists(),
+        "a file we never loaded must stay untouched"
+    );
+}
+
+#[test]
 fn books_without_a_config_still_load_and_get_one_on_save() {
     let dir = temp_dir("stories-only");
     fs::create_dir_all(dir.join("stories")).expect("stories folder");

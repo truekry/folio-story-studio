@@ -994,7 +994,7 @@ fn a_double_click_switches_a_prompt_block_off() {
         };
         let _ = ctx.run(input, |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                prompt_layout_card(ui, LayoutKind::Writing, order, disabled);
+                prompt_layout_card(ui, LayoutKind::Writing, order, disabled, None);
             });
         });
     };
@@ -1137,8 +1137,8 @@ fn the_two_layout_cards_keep_their_own_switches() {
         };
         let _ = ctx.run(input, |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                prompt_layout_card(ui, LayoutKind::Writing, order, disabled);
-                prompt_layout_card(ui, LayoutKind::Chat, chat_order, chat_disabled);
+                prompt_layout_card(ui, LayoutKind::Writing, order, disabled, None);
+                prompt_layout_card(ui, LayoutKind::Chat, chat_order, chat_disabled, None);
             });
         });
     };
@@ -1191,4 +1191,47 @@ fn the_two_layout_cards_keep_their_own_switches() {
         disabled.is_empty(),
         "the writing layout must stay untouched"
     );
+}
+
+#[test]
+fn the_bin_survives_a_restart() {
+    let dir = std::env::temp_dir().join(format!("folio-bin-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("bin folder");
+
+    let mut library = Library::sample();
+    let mut story = library.stories.remove(0);
+    let chapter = story.chapters.remove(0);
+    let trash = vec![TrashItem::Chapter {
+        id: 7,
+        story_id: story.key.clone(),
+        story_title: story.title.clone(),
+        index: 0,
+        chapter,
+        deleted_at: crate::model::now_millis(),
+    }];
+    super::stories::save_trash(&dir, &trash);
+
+    let loaded = super::stories::load_trash(&dir);
+    assert_eq!(loaded.len(), 1);
+    assert_eq!(loaded[0].id(), 7);
+    assert_eq!(loaded[0].title(), trash[0].title());
+    assert_eq!(loaded[0].story_id(), trash[0].story_id());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_cached_find_matches_a_fresh_one_and_notices_edits() {
+    let text = "Mira MIRA Mira";
+    let mut cache = None;
+    let first = find_ranges_cached(&mut cache, text, "mira", false);
+    let second = find_ranges_cached(&mut cache, text, "mira", false);
+    assert_eq!(first, second);
+    assert_eq!(first, find_char_ranges(text, "mira", false));
+
+    let edited = find_ranges_cached(&mut cache, "Mira", "mira", false);
+    assert_eq!(edited.len(), 1);
+    let exact = find_ranges_cached(&mut cache, text, "Mira", true);
+    assert_eq!(exact, find_char_ranges(text, "Mira", true));
 }

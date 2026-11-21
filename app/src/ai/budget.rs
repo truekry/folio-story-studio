@@ -30,6 +30,23 @@ pub(crate) fn history_tokens(history: &[ChatMessage]) -> usize {
         .sum()
 }
 
+/// One line for the prompt editor: how big a request is right now, and how much
+/// of the endpoint's window it takes. Zero means no window was reported.
+pub(crate) fn size_line(label: &str, tokens: usize, window: usize) -> String {
+    if window == 0 {
+        format!("{label} ≈ {tokens} tokens · context window not reported")
+    } else {
+        let percent = (tokens * 100 + window / 2) / window;
+        format!("{label} ≈ {tokens} tokens · {percent} % of the {window} window")
+    }
+}
+
+/// True when the request would eat into the headroom the reply needs. The same
+/// line the conversation budget uses, so the colour and the condensing agree.
+pub(crate) fn size_is_tight(tokens: usize, window: usize) -> bool {
+    window > 0 && tokens * 100 / window >= CONTEXT_FILL_PERCENT
+}
+
 /// How many reply tokens a word target needs. Two tokens per word is generous
 /// for English prose; the extra hundred is room to finish the last sentence
 /// without letting the reply run to several times the target.
